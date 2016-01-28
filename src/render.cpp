@@ -31,14 +31,29 @@
 #include <d3d9.h>
 #include <d3d9types.h>
 
+///// Known Issues:
+///// -------------
+///// 1/27/16 - 1.  The History / Pawns Used scren is known to be broken, appears to be scissor-rect related
+/////           2.  Pawn nameplates in the Rift are over-corrected (they need no correction)
+
 bool needs_aspect       = false;
 bool needs_ui_center    = false;
-bool scissoring         = false;
+bool scissoring          = false;
+
+bool bg_filled           = false;
+
+float last_x        = 0.0f;
+float last_z        = 0.0f;
+bool  drawing_quest = false;
+bool  drawing_names = false;
+bool  names_drawn   = false;
+
+bool  drawing_menu  = false;
 
 // The minimap is 3 shaders, basically... so once triggered
 //   we will continue to modify the viewport coordinates until
 //     2 shader changes elapse.
-struct dd_map_draw_t {
+struct dd_map_draw_s {
   bool  drawing        = false;
   int   shader_changes = 0;
   int   prims_drawn    = 0;
@@ -50,6 +65,47 @@ struct dd_map_draw_t {
 
   bool  center_prim    = false; // The triangle in the middle
 } map;
+
+
+#include <map>
+std::unordered_map <LPVOID, uint32_t> vs_checksums;
+std::unordered_map <LPVOID, uint32_t> ps_checksums;
+
+// Encapsulates a tracked Direct3D9 shader
+struct dd_shader_s {
+  const uint32_t crc32;         // Bytecode Signature
+  const wchar_t* description;   // _Brief_ Description
+
+  enum {
+    MAX_CONSTS = 64,            // Allow storage for up to 16x vec4
+    MAX_VEC4S  = MAX_CONSTS / 4
+  };
+
+  union {
+    // Flat array of constants
+    float   data [MAX_CONSTS];
+
+    // Individual vec4s for convenience
+    struct {
+      float data  [4];          // One component in an indexed vec4
+    }       vec4s [MAX_VEC4S];
+  } constants;
+};
+
+#define PS_CRC32_TEXT 0x0d6c2e96 // All text uses this pixel shader
+#define PS_CRC32_BG0  0x79b9d805 // One of a few pixel shaders used for translucent backgrounds
+
+dd_shader_s ps_text = { PS_CRC32_TEXT, L"text" };
+dd_shader_s ps_bg0  = { PS_CRC32_BG0,  L"bg0"  };
+
+// Map checksums to shaders
+std::unordered_map <uint32_t, dd_shader_s*> tracked_shader_map;
+
+struct {
+  dd_shader_s* ps = nullptr; // Non-NULL if the bound ps is being tracked
+  dd_shader_s* vs = nullptr; // Non-NULL if the bound vs is being tracked
+} current_shader;
+
 
 D3DVIEWPORT9 viewport;
 
@@ -169,10 +225,6 @@ crc32(uint32_t crc, const void *buf, size_t size)
   return crc ^ ~0U;
 }
 
-#include <map>
-std::unordered_map <LPVOID, uint32_t> vs_checksums;
-std::unordered_map <LPVOID, uint32_t> ps_checksums;
-
 // Store the CURRENT shader's checksum instead of repeatedly
 //   looking it up in the above hashmaps.
 uint32_t vs_checksum = 0;
@@ -254,6 +306,15 @@ D3D9SetPixelShader_Detour (IDirect3DDevice9*      This,
           ps_checksums [pShader] = crc32 (0, pbFunc, len);
 
           free (pbFunc);
+
+          if (ps_checksums [pShader] == ps_bg0.crc32)
+            tracked_shader_map [ps_checksums [pShader]] = &ps_bg0;
+
+          else if (ps_checksums [pShader] == ps_text.crc32)
+            tracked_shader_map [ps_checksums [pShader]] = &ps_text;
+
+          else
+            tracked_shader_map [ps_checksums [pShader]] = nullptr;
         }
       }
     } else {
@@ -275,6 +336,14 @@ D3D9SetPixelShader_Detour (IDirect3DDevice9*      This,
   dof_active = false;
 
   ps_checksum = ps_checksums [pShader];
+
+
+  // Cache the tracked shader
+  if (tracked_shader_map.find (ps_checksum) != tracked_shader_map.end ())
+    current_shader.ps = tracked_shader_map [ps_checksum];
+  else
+    current_shader.ps = nullptr;
+
 
   g_pPS = pShader;
   return D3D9SetPixelShader_Original (This, pShader);
@@ -335,6 +404,15 @@ D3D9EndFrame_Post (HRESULT hr, IUnknown* device)
 
   needs_aspect       = false;
   needs_ui_center    = false;
+  bg_filled          = false;
+
+  last_x        = 0.0f;
+  last_z        = 0.0f;
+  drawing_quest = false; // This happens before nametags
+  drawing_names = false;
+  names_drawn   = false;
+
+  drawing_menu = false;
 
   map.drawing        = false;
   map.shader_changes = 0;
@@ -1179,7 +1257,48 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
   }
 #endif
 
+  // Quest indicators are 128x128 textures billboarded before nametags (phase 1 of 2)
+  if (needs_aspect && StartRegister == 11 && Vector4fCount == 1) {
+    if (pConstantData [0] == 0.0078125f) // 1.0 / 128.0
+      drawing_quest = true;
+  }
+
+#if 1
+  if (needs_aspect) {
+    if (log_frame) {
+      dll_log.Log ( L" SetVertexShaderConstantF (vs: %x - [ps: %x]) - Start: %lu, Count: %lu",
+                            vs_checksum, ps_checksum, StartRegister, Vector4fCount );
+      for (int i = 0; i < Vector4fCount; i++) {
+        dll_log.Log ( L"   %9.5f, %9.5f, %9.5f, %9.5f",
+                              pConstantData [i * 4 + 0], pConstantData [i * 4 + 1],
+                              pConstantData [i * 4 + 2], pConstantData [i * 4 + 3] );
+      }
+    }
+  }
+#endif
+
   if (needs_aspect && config.render.aspect_correction && viewport.Width / viewport.Height == ad::RenderFix::width / ad::RenderFix::height && (StartRegister == 1/* || StartRegister == 9*/)) {
+
+    //last_vs = 0x5c8f22bc && last_ps == 0xbf9778a
+
+    //
+    // Common UI depths (EXACTLY: 0, 16, 32, 100)
+    //
+    if (last_z == 0.0f && (! (pConstantData [14] == 16.0f || pConstantData [14] == 0.0f || pConstantData [14] == 100.0f || pConstantData [14] == 32.0f)) && pConstantData [10] == 1.0f && pConstantData [15] == 1.0f && (! names_drawn)) {
+      drawing_names = true;
+    }
+
+    last_x = pConstantData [12];
+    last_z = pConstantData [14];
+
+    if ((pConstantData [14] == 16.0f || pConstantData [14] == 0.0f || pConstantData [14] == 100.0f || pConstantData [14] == 32.0f) && drawing_names) {
+      if (! drawing_quest)
+        names_drawn = true;
+
+      drawing_names = false;
+      drawing_quest = false;
+    }
+
     float ar       = (float)viewport.Width / (float)viewport.Height;
     float ar_scale = ar / (16.0f / 9.0f);
 
@@ -1219,46 +1338,24 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
 
       //width = (16.0f / 9.0f) * viewport.Height;
 
-      // Loading screens use a Z translation of 100
-      // Most HUD items are either translated 16 or 0 units
-
-      // 229.99997 has been seen on inventory screens, but feels like a fluke
-
-      // Assume that all other Z translations are things like nametags,
-      //   which must not be centered (translated horizontally).
-
-      //
-      // Loading screens tend to have depth = 700
-      //
-
-#define PS_CRC32_TEXT 0xd6c2e96
-
       bool needs_center = false;
       
       if (config.render.center_ui) {
         needs_center = true;
 
         if (needs_center) {
-          if (! (pConstantData [14] == 16.0f || pConstantData [14] == 0.0f || pConstantData [14] == 100.0f || pConstantData [14] == 32.0f || pConstantData [14] == 700.0f /*|| vs_checksum == 0xf52212b8*/)) {
-            //if (! (pConstantData [0] == 1.0f && pConstantData [5] == 1.0f && pConstantData [10] == 1.0f)) // Fix for Status screen
-              needs_center = false;
+          // The background on menu screens uses this scale, and we always want to stretch it
+          if (pConstantData [0] == 1.0f && pConstantData [5] == 1.5f) {
+            drawing_menu = true;
+            needs_center = false;
           }
+
+          if ((! drawing_menu) && drawing_names && (! names_drawn))
+            needs_center = false;
+
+          //if (! (pConstantData [0] == 1.0f && pConstantData [5] == 1.0f && pConstantData [10] == 1.0f)) // Fix for Map Screen Scaling
+            //needs_center = false;
         }
-
-
-        // pConstantData [4] not equal to zero only happens on rotating UI elements
-
-        //
-        // Handle save screens
-        //
-        if ((pConstantData [4] != 0.0f || pConstantData [12] == 640.0f) && pConstantData [14] > 220.0f)
-          needs_center = true;
-      }
-
-      // Translucent backgrounds (only once per-frame)
-      if (ps_checksum == 0x79b9d805) {
-        fullscreen_blit = true;
-        needs_center    = false;
       }
 
       // Map drawing is special, we will use a viewport to handle this,
@@ -1267,34 +1364,13 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
         needs_center = false;
       }
 
+      // Background UI stuff
+      if (current_shader.ps == &ps_bg0 && (! bg_filled)) {
+        needs_center = false;
+        bg_filled    = true;
+      }
+
       bool forbid_center = false;
-
-      if (pConstantData [14] != 16.0f && pConstantData [14] > 0.0f && pConstantData [14] >= 100.0f) {
-        //forbid_center = true;
-#if 0
-        dll_log.Log (L" **** Expected 0.0, 16.0 or 100.0 but got %f", pConstantData [14]);
-#endif
-        //needs_center = false;
-      }
-
-      //
-      // These shaders are used on certain fullscreen effects
-      //
-      if (vs_checksum == 0x3130653c || vs_checksum == 0x29c8a5c7) {
-#if 0
-        if (log_frame) {
-          dll_log.Log ( L" SetVertexShaderConstantF (%x) - Start: %lu, Count: %lu",
-                          vs_checksum, StartRegister, Vector4fCount );
-          for (int i = 0; i < Vector4fCount; i++) {
-            dll_log.Log ( L"   %9.5f, %9.5f, %9.5f, %9.5f",
-                            pConstantData [i * 4 + 0], pConstantData [i * 4 + 1],
-                            pConstantData [i * 4 + 2], pConstantData [i * 4 + 3] );
-          }
-      }
-#endif
-
-        // A lot of things with these shaders have z=32
-      }
 
       // All fullscreen effects have translation of 640 horizontally and 360 vertically...
       //   this is precisely 1/2 of the Xbox 360's native resolution.
@@ -1474,6 +1550,28 @@ D3D9SetPixelShaderConstantF_Detour (IDirect3DDevice9* This,
     } else {
       fullscreen_blit = false;
     }
+  }
+
+  // If this is a tracked pixel shader ...
+  if (current_shader.ps != nullptr) {
+    if (log_frame) {
+      dll_log.Log ( L" Tracked PS (%x - \"%s\") Constant Set - Start: %lu, Count: %lu",
+                      current_shader.ps->crc32, current_shader.ps->description, StartRegister, Vector4fCount );
+
+      for (int i = 0; i < Vector4fCount; i++) {
+        dll_log.Log ( L"    %f, %f, %f, %f", pConstantData [i*4+0], pConstantData [i*4+1],
+                                             pConstantData [i*4+2], pConstantData [i*4+3] );
+      }
+
+      if (memcmp ( &current_shader.ps->constants.vec4s [StartRegister].data [0],
+                     pConstantData,
+                       sizeof (float) * 4 * min (Vector4fCount, dd_shader_s::MAX_VEC4S)) )
+        dll_log.Log ( L"     * CHANGED values detected");
+    }
+
+    memcpy ( &current_shader.ps->constants.vec4s [StartRegister].data [0],
+               pConstantData,
+                 sizeof (float) * 4 * min (Vector4fCount, dd_shader_s::MAX_VEC4S) );
   }
 
   if (map.drawing) {
@@ -1726,6 +1824,8 @@ ad::RenderFix::CommandProcessor::CommandProcessor (void)
   command.AddVariable ("LogFrame",         new eTB_VarStub <bool>  (&log_frame));
   command.AddVariable ("FramesToLog",      new eTB_VarStub <int>   (&log_frame_count));
 
+  extern float mouse_y_scale;
+  command.AddVariable ("MouseYScale",     new eTB_VarStub <float> (&mouse_y_scale));
 }
 
 bool

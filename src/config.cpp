@@ -25,7 +25,7 @@
 #include "ini.h"
 #include "log.h"
 
-std::wstring AD_VER_STR = L"0.0.8";
+std::wstring AD_VER_STR = L"0.0.9";
 
 static ad::INI::File*  dll_ini = nullptr;
 

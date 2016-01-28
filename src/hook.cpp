@@ -75,6 +75,39 @@ AD_FindRootWindow (DWORD proc_id)
   return win.root;
 }
 
+float mouse_y_scale;
+
+
+void
+AD_ComputeAspectCoeffsEx (float& x, float& y, float& xoff, float& yoff)
+{
+  yoff = 0.0f;
+  xoff = 0.0f;
+
+  x = 1.0f;
+  y = 1.0f;
+
+  if (! (config.render.aspect_correction))
+    return;
+
+  config.render.aspect_ratio = ad::RenderFix::width / ad::RenderFix::height;
+  float rescale = (1.77777778f / config.render.aspect_ratio);
+
+  // Wider
+  if (config.render.aspect_ratio > 1.7777f) {
+    int width = (16.0f / 9.0f) * ad::RenderFix::height;
+    int x_off = (ad::RenderFix::width - width) / 2;
+
+    x    = (float)ad::RenderFix::width / (float)width;
+    xoff = x_off;
+  } else {
+    int height = (9.0f / 16.0f) * ad::RenderFix::width;
+    int y_off  = (ad::RenderFix::height - height) / 2;
+
+    y    = (float)ad::RenderFix::height / (float)height;
+    yoff = y_off;
+  }
+}
 
 // Returns the original cursor position and stores the new one in pPoint
 POINT
@@ -83,21 +116,34 @@ CalcCursorPos (LPPOINT pPoint)
   float xscale, yscale;
   float xoff,   yoff;
 
-  extern void AD_ComputeAspectCoeffs ( float& xscale,
-                                       float& yscale,
-                                       float& xoff,
-                                       float& yoff );
+  AD_ComputeAspectCoeffsEx (xscale, yscale, xoff, yoff);
 
-  AD_ComputeAspectCoeffs (xscale, yscale, xoff, yoff);
+  //
+  // TODO: Factor this straight into xoff during AD_ComputeAspectCoeffs
+  //
+  yscale = xscale;
 
-  pPoint->x = (pPoint->x - xoff) * xscale;
-  pPoint->y = (pPoint->y - yoff) * yscale;
+  if (! config.render.center_ui) {
+    xscale = 1.0f;
+    xoff   = 0.0f;
+  }
+
+  pPoint->x = ((float)pPoint->x - xoff) * xscale;
+  pPoint->y = ((float)pPoint->y - yoff) * yscale;
+
+  ///int width = ad::RenderFix::width;
+  ///int height = (9.0f / 16.0f) * width;
+
+  ////float scale = (float)height / ad::RenderFix::height;
+
+  ////float y_ndc = 2.0f * ((float)pPoint->y / (float)ad::RenderFix::height) - 1.0f;
+
+  /////pPoint->y = ((float)pPoint->y - (ad::RenderFix::height / xscale)) * (xscale);// ((y_ndc * ad::RenderFix::height * scale + ad::RenderFix::height * scale) / 3.0f);
 
   return *pPoint;
 }
 
 
-#if 0
 WNDPROC original_wndproc = nullptr;
 
 LRESULT
@@ -115,7 +161,7 @@ DetourWindowProc ( _In_  HWND   hWnd,
     p.x = MAKEPOINTS (lParam).x;
     p.y = MAKEPOINTS (lParam).y;
 
-    if (game_state.needsFixedMouseCoords () && config.render.aspect_correction) {
+    if (/*game_state.needsFixedMouseCoords () &&*/config.render.aspect_correction) {
       // Only do this if cursor actually moved!
       //
       //   Otherwise, it tricks the game into thinking the input device changed
@@ -148,7 +194,7 @@ GetCursorInfo_Detour (PCURSORINFO pci)
   BOOL ret = GetCursorInfo_Original (pci);
 
   // Correct the cursor position for Aspect Ratio
-  if (game_state.needsFixedMouseCoords () && config.render.aspect_correction) {
+  if (config.render.aspect_correction) {
     POINT pt;
 
     pt.x = pci->ptScreenPos.x;
@@ -175,7 +221,7 @@ GetCursorPos_Detour (LPPOINT lpPoint)
   BOOL ret = GetCursorPos_Original (lpPoint);
 
   // Correct the cursor position for Aspect Ratio
-  if (game_state.needsFixedMouseCoords () && config.render.aspect_correction)
+  if (config.render.aspect_correction)
     CalcCursorPos (lpPoint);
 
   // Defer initialization of the Window Message redirection stuff until
@@ -191,7 +237,6 @@ GetCursorPos_Detour (LPPOINT lpPoint)
 
   return ret;
 }
-#endif
 
 
 class AD_InputHooker
@@ -240,7 +285,6 @@ public:
                              NULL,
                                NULL );
 
-#if 0
     AD_CreateDLLHook ( L"user32.dll", "GetCursorInfo",
                         GetCursorInfo_Detour,
               (LPVOID*)&GetCursorInfo_Original );
@@ -248,7 +292,6 @@ public:
     AD_CreateDLLHook ( L"user32.dll", "GetCursorPos",
                         GetCursorPos_Detour,
               (LPVOID*)&GetCursorPos_Original );
-#endif
   }
 
   void End (void)
