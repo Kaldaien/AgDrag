@@ -27,14 +27,24 @@
 
 extern std::wstring AD_VER_STR;
 
-struct ad_config_t
+struct ad_config_s
 {
   struct {
     bool     aspect_correction = true;
-    float    aspect_ratio      = 1.7777778f;
+    float    aspect_ratio      = (16.0f / 9.0f);
     bool     center_ui         = true;
     bool     fix_minimap       = true;
   } render;
+
+  struct {
+    bool     aspect_correct    = false;
+    int      always_on_top     = 2;
+    bool     temp_on_top       = false; // When the key combo is held
+    uint16_t
+             hold_on_top_key   = (uint16_t)'N';
+    uint16_t
+             toggle_on_top_key = (uint16_t)'N';
+  } nametags;
 
   struct {
     std::wstring
@@ -44,7 +54,7 @@ struct ad_config_t
   } system;
 };
 
-extern ad_config_t config;
+extern ad_config_s config;
 
 bool AD_LoadConfig (std::wstring name         = L"AgDrag");
 void AD_SaveConfig (std::wstring name         = L"AgDrag",

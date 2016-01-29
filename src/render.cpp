@@ -31,41 +31,26 @@
 #include <d3d9.h>
 #include <d3d9types.h>
 
+#include "hud/minimap.h"
+#include "hud/nametags.h"
+
 ///// Known Issues:
 ///// -------------
 ///// 1/27/16 - 1.  The History / Pawns Used scren is known to be broken, appears to be scissor-rect related
 /////           2.  Pawn nameplates in the Rift are over-corrected (they need no correction)
 
+bool widescreen         = false;
 bool needs_aspect       = false;
-bool needs_ui_center    = false;
-bool scissoring          = false;
+bool needs_center       = false;
+bool scissoring         = false;
 
-bool bg_filled           = false;
+bool bg_filled          = false;
 
 float last_x        = 0.0f;
 float last_z        = 0.0f;
 bool  drawing_quest = false;
-bool  drawing_names = false;
-bool  names_drawn   = false;
 
 bool  drawing_menu  = false;
-
-// The minimap is 3 shaders, basically... so once triggered
-//   we will continue to modify the viewport coordinates until
-//     2 shader changes elapse.
-struct dd_map_draw_s {
-  bool  drawing        = false;
-  int   shader_changes = 0;
-  int   prims_drawn    = 0;
-  float prim_ypos      = 0.0f;
-  float prim_xpos      = 0.0f;
-
-  float ps23           = 0.0f;
-  float ps43           = 0.0f;
-
-  bool  center_prim    = false; // The triangle in the middle
-} map;
-
 
 #include <map>
 std::unordered_map <LPVOID, uint32_t> vs_checksums;
@@ -142,21 +127,24 @@ AD_ComputeAspectCoeffs (float& x, float& y, float& xoff, float& yoff)
     return;
 
   config.render.aspect_ratio = ad::RenderFix::width / ad::RenderFix::height;
-  float rescale = (1.77777778f / config.render.aspect_ratio);
+  float rescale = (16.0f / 9.0f) / config.render.aspect_ratio;
 
   // Wider
-  if (config.render.aspect_ratio > 1.7777f) {
+  if (config.render.aspect_ratio > (16.0 / 9.0f)) {
     int width = (16.0f / 9.0f) * viewport.Height;
     int x_off = (viewport.Width - width) / 2;
 
     x    = (float)viewport.Width / (float)width;
     xoff = x_off;
   } else {
+    // Game doesn't need fixing in the other direction
+#if 0
     int height = (9.0f / 16.0f) * viewport.Width;
     int y_off  = (viewport.Height - height) / 2;
 
     y    = (float)viewport.Height / (float)height;
     yoff = y_off;
+#endif
   }
 }
 
@@ -268,7 +256,7 @@ D3D9SetVertexShader_Detour (IDirect3DDevice9*       This,
   }
 
   if (vs_checksum != vs_checksums [pShader])
-    needs_ui_center = false;
+    needs_center = false;
 
   vs_checksum = vs_checksums [pShader];
 
@@ -324,13 +312,13 @@ D3D9SetPixelShader_Detour (IDirect3DDevice9*      This,
 
   // Pixel Shader Changed
   if (ps_checksum != ps_checksums [pShader]) {
-    if (map.drawing) {
-      ++map.shader_changes;
-      if (map.shader_changes > 2)
-        map.drawing = false;
+    if (minimap->drawing) {
+      ++minimap->shader_changes;
+      if (minimap->shader_changes > 2)
+        minimap->drawing = false;
     }
 
-    needs_ui_center = false;
+    //needs_center = false;
   }
 
   dof_active = false;
@@ -403,25 +391,17 @@ D3D9EndFrame_Post (HRESULT hr, IUnknown* device)
     return BMF_EndBufferSwap (hr, device);
 
   needs_aspect       = false;
-  needs_ui_center    = false;
+  needs_center       = false;
   bg_filled          = false;
 
   last_x        = 0.0f;
   last_z        = 0.0f;
   drawing_quest = false; // This happens before nametags
-  drawing_names = false;
-  names_drawn   = false;
 
   drawing_menu = false;
 
-  map.drawing        = false;
-  map.shader_changes = 0;
-  map.prims_drawn    = 0;
-  map.prim_ypos      = 0.0f;
-  map.prim_xpos      = 0.0f;
-  map.ps23           = 0.0f;
-  map.ps43           = 0.0f;
-  map.center_prim    = false;
+  minimap->reset  ();
+  nametags->reset ();
 
   scissoring         = false;
   fix_rect           = false;
@@ -777,7 +757,7 @@ D3D9SetScissorRect_Detour (IDirect3DDevice9* This,
   }
 
   // Wider
-  if (config.render.aspect_ratio > 1.7777f) {
+  if (config.render.aspect_ratio > (16.0f / 9.0f)) {
     float left_ndc  = 2.0f * ((float)pRect->left  / ((float)viewport.X  + (float)viewport.Width)) - 1.0f;
     float right_ndc = 2.0f * ((float)pRect->right / ((float)viewport.X  + (float)viewport.Width)) - 1.0f;
 
@@ -981,7 +961,7 @@ D3D9DrawPrimitive_Detour ( IDirect3DDevice9* This,
     return S_OK;
   }
 
-  if (map.drawing) {
+  if (minimap->drawing) {
     D3DVIEWPORT9 vp = viewport;
     float x, y;
     float x_off, y_off;
@@ -993,14 +973,14 @@ D3D9DrawPrimitive_Detour ( IDirect3DDevice9* This,
     }
 
     if (log_frame) {
-      dll_log.Log ( L" Minimap Item %d: (%f, %f) [vs: %x, ps: %x]", map.prims_drawn,
-                                                                    map.prim_xpos,
-                                                                    map.prim_ypos,
+      dll_log.Log ( L" Minimap Item %d: (%f, %f) [vs: %x, ps: %x]", minimap->prims_drawn,
+                                                                    minimap->prim_xpos,
+                                                                    minimap->prim_ypos,
                                                                     vs_checksum,
                                                                     ps_checksum );
     }
 
-    if ((map.ps23 == 1.0f && map.ps43 == 1.0f && vert_fix_map) || map.center_prim) {
+    if ((minimap->ps23 == 1.0f && minimap->ps43 == 1.0f && vert_fix_map) || minimap->center_prim) {
       //if (! vert_fix_map)
         //vp.Height -= ((float)viewport.Height - vp.Height / x) / 2.0f;
     }
@@ -1011,19 +991,31 @@ D3D9DrawPrimitive_Detour ( IDirect3DDevice9* This,
 
     D3D9SetViewport_Original (This, &vp);
 
-    map.prims_drawn++;
-    map.center_prim = false;
+    minimap->prims_drawn++;
+    minimap->center_prim = false;
+  }
+
+  if (nametags->drawing && nametags->shouldDrawOnTop ()) {
+    // Draw once normally
+    if (nametags->top_technique > 1) {
+      D3D9DrawPrimitive_Original ( This,
+                                     PrimitiveType,
+                                       StartVertex,
+                                         PrimitiveCount );
+    }
+
+    nametags->beginPrimitive (This);
   }
 
 #if 0
-  if (needs_ui_center && needs_aspect) {
+  if (needs_center && needs_aspect) {
     D3DVIEWPORT9 vp = viewport;
     float x, y;
     float x_off, y_off;
     AD_ComputeAspectCoeffs (x, y, x_off, y_off);
 
     if (config.render.center_ui) {
-      //vp.Width /= x;
+      vp.Width /= x;
       vp.X     += x_off;
     }
 
@@ -1038,7 +1030,10 @@ D3D9DrawPrimitive_Detour ( IDirect3DDevice9* This,
                                        StartVertex,
                                          PrimitiveCount );
 
-  if (map.drawing || (needs_ui_center && needs_aspect)) {
+  if (nametags->drawing && nametags->shouldDrawOnTop ())
+    nametags->endPrimitive (This);
+
+  if (minimap->drawing /*|| (needs_center && needs_aspect)*/) {
     D3D9SetViewport_Original (This, &viewport);
   }
 
@@ -1089,7 +1084,7 @@ D3D9DrawIndexedPrimitive_Detour (IDirect3DDevice9* This,
   //
   //  -- All of the orbiting blips on the map are non-indexed
   //
-  if (map.drawing) {
+  if (minimap->drawing) {
     D3DVIEWPORT9 vp = viewport;
     float x, y;
     float x_off, y_off;
@@ -1104,18 +1099,18 @@ D3D9DrawIndexedPrimitive_Detour (IDirect3DDevice9* This,
 
     D3D9SetViewport_Original (This, &vp);
 
-    map.prims_drawn++;
+    minimap->prims_drawn++;
   }
 
 #if 0
-  if (needs_ui_center && needs_aspect) {
+  if (needs_center && needs_aspect) {
     D3DVIEWPORT9 vp = viewport;
     float x, y;
     float x_off, y_off;
     AD_ComputeAspectCoeffs (x, y, x_off, y_off);
 
     if (config.render.center_ui) {
-      //vp.Width /= x;
+      vp.Width /= x;
       vp.X     += x_off;
     }
 
@@ -1123,13 +1118,36 @@ D3D9DrawIndexedPrimitive_Detour (IDirect3DDevice9* This,
   }
 #endif
 
+  DWORD dwLastZEnable  = 0;
+  DWORD dwLastZFunc    = 0;
+
+  DWORD dwLastBlendOp  = 0;
+  DWORD dwLastSrcOp    = 0;
+  DWORD dwLastDstOp    = 0;
+  DWORD dwLastBlend    = 0;
+
+  if (nametags->drawing && nametags->shouldDrawOnTop ()) {
+    // Draw once normally
+    if (nametags->top_technique > 1) {
+      D3D9DrawIndexedPrimitive_Original ( This, Type,
+                                            BaseVertexIndex, MinVertexIndex,
+                                               NumVertices, startIndex,
+                                                 primCount );
+    }
+
+    nametags->beginPrimitive (This);
+  }
+
   HRESULT
     hr = D3D9DrawIndexedPrimitive_Original ( This, Type,
                                                BaseVertexIndex, MinVertexIndex,
                                                  NumVertices, startIndex,
                                                    primCount );
 
-  if (map.drawing || (needs_ui_center && needs_aspect)) {
+  if (nametags->drawing && nametags->shouldDrawOnTop ())
+    nametags->endPrimitive (This);
+
+  if (minimap->drawing /*|| (needs_center && needs_aspect)*/) {
     D3D9SetViewport_Original (This, &viewport);
   }
 
@@ -1145,7 +1163,8 @@ typedef HRESULT (STDMETHODCALLTYPE *SetVertexShaderConstantF_t)(
 
 SetVertexShaderConstantF_t D3D9SetVertexShaderConstantF_Original = nullptr;
 
-float scale_coeff = 0.5f;
+float scale_coeff      = 0.5f;
+float name_shift_coeff = 1.01f;
 
 COM_DECLSPEC_NOTHROW
 HRESULT
@@ -1178,7 +1197,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
   //
   // Post-Processing Fix (e.g. DoF)
   //
-  if ((float)viewport.Width / (float)viewport.Height > 1.777777777777778f && fix_dof && StartRegister == 1 && Vector4fCount == 1 && pConstantData [2] == 0.0f && pConstantData [3] == 0.0f && needs_aspect) {
+  if ((float)viewport.Width / (float)viewport.Height > (16.0f / 9.0f) && fix_dof && StartRegister == 1 && Vector4fCount == 1 && pConstantData [2] == 0.0f && pConstantData [3] == 0.0f && needs_aspect) {
     float inv_x         = 1.0f / pConstantData [0];
     float inv_y         = 1.0f / pConstantData [1];
     const float aspect  = 16.0f / 9.0f;
@@ -1200,7 +1219,8 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
 
       //dll_log.Log (L" Y Before: %f, Y After: %f", inv_y, 1.0f / pFixedConstants [1]);
 
-      return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pFixedConstants, Vector4fCount);
+      if (widescreen)
+        return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pFixedConstants, Vector4fCount);
     }
   }
 
@@ -1238,9 +1258,10 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
         pNotConstantData [i] = pConstantData [i] / y_scale;
       }
 
-      map.drawing = true;
+      minimap->drawing = true;
 
-      return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pNotConstantData, Vector4fCount);
+      if (widescreen)
+        return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pNotConstantData, Vector4fCount);
     }
   }
 
@@ -1284,19 +1305,19 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
     //
     // Common UI depths (EXACTLY: 0, 16, 32, 100)
     //
-    if (last_z == 0.0f && (! (pConstantData [14] == 16.0f || pConstantData [14] == 0.0f || pConstantData [14] == 100.0f || pConstantData [14] == 32.0f)) && pConstantData [10] == 1.0f && pConstantData [15] == 1.0f && (! names_drawn)) {
-      drawing_names = true;
+    if ((! nametags->finished) && last_z == 0.0f && (! (pConstantData [14] == 16.0f || pConstantData [14] == 0.0f || pConstantData [14] == 100.0f || pConstantData [14] == 32.0f)) && pConstantData [10] == 1.0f && pConstantData [15] == 1.0f) {
+      nametags->drawing = true;
     }
 
     last_x = pConstantData [12];
     last_z = pConstantData [14];
 
-    if ((pConstantData [14] == 16.0f || pConstantData [14] == 0.0f || pConstantData [14] == 100.0f || pConstantData [14] == 32.0f) && drawing_names) {
+    if (nametags->drawing && (pConstantData [14] == 16.0f || pConstantData [14] == 0.0f || pConstantData [14] == 100.0f || pConstantData [14] == 32.0f)) {
       if (! drawing_quest)
-        names_drawn = true;
+        nametags->finished = true;
 
-      drawing_names = false;
-      drawing_quest = false;
+      nametags->drawing = false;
+      drawing_quest     = false;
     }
 
     float ar       = (float)viewport.Width / (float)viewport.Height;
@@ -1338,7 +1359,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
 
       //width = (16.0f / 9.0f) * viewport.Height;
 
-      bool needs_center = false;
+      needs_center = false;
       
       if (config.render.center_ui) {
         needs_center = true;
@@ -1350,7 +1371,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
             needs_center = false;
           }
 
-          if ((! drawing_menu) && drawing_names && (! names_drawn))
+          if ((! drawing_menu) && nametags->drawing && (! nametags->finished))
             needs_center = false;
 
           //if (! (pConstantData [0] == 1.0f && pConstantData [5] == 1.0f && pConstantData [10] == 1.0f)) // Fix for Map Screen Scaling
@@ -1358,14 +1379,20 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
         }
       }
 
+      if (pConstantData [14] < 0.0f || pConstantData [10] > 1.0f) {
+        if (log_frame)
+          dll_log.Log (L" Depth: %11.9f <Scale: %11.9f>", pConstantData [14], pConstantData [10]);
+        needs_center = false;
+      }
+
       // Map drawing is special, we will use a viewport to handle this,
       //   so do not mess with its X coordinate.
-      if (map.drawing) {
+      if (minimap->drawing) {
         needs_center = false;
       }
 
       // Background UI stuff
-      if (current_shader.ps == &ps_bg0 && (! bg_filled)) {
+      if (current_shader.ps == &ps_bg0 && ((! bg_filled) || drawing_menu)) {
         needs_center = false;
         bg_filled    = true;
       }
@@ -1378,7 +1405,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
         needs_center = false;
       }
 
-      if (log_frame && (! needs_center) && (! map.drawing)) {
+      if (log_frame && (! needs_center) && (! minimap->drawing)) {
           dll_log.Log ( L" SetVertexShaderConstantF (vs: %x - [ps: %x]) - Start: %lu, Count: %lu",
                             vs_checksum, ps_checksum, StartRegister, Vector4fCount );
             for (int i = 0; i < Vector4fCount; i++) {
@@ -1405,29 +1432,26 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
 
       if (needs_center)
         pNotConstantData [0] /= ar_scale;
+      //else if (nametags->drawing) {
+        //pNotConstantData [0] /= ar_scale;
+      //}
 
-      // Don't squish nametags :)
-      if (! forbid_center)
-        pNotConstantData [1] /= ar_scale;
-
-      if (! forbid_center)
-        pNotConstantData [4] /= ar_scale;
-
-      if (! forbid_center)
-        pNotConstantData [5] /= ar_scale;
+      pNotConstantData [1] /= ar_scale;
+      pNotConstantData [4] /= ar_scale;
+      pNotConstantData [5] /= ar_scale;
 
       ////dll_log.Log (L"x_off, ar_scale, x_scale, maybe?, maybe? : %f, %f, %f, %f, %f", x_off, ar_scale, x_scale, x_off / ar_scale, x_off / x_scale);
 
 
       float scale_trans [16];
-      float scale [16] = { x_scale, 0.0f,    0.0f, 0.0f,
-                           0.0f,    y_scale, 0.0f, 0.0f,
-                           0.0f,    0.0f,    1.0f, 0.0f,
-                           0.0f,    0.0f,    0.0f, 1.0f };
+      float scale [16] = { 1.0f/x_scale, 0.0f,    0.0f, 0.0f,
+                           0.0f,         y_scale, 0.0f, 0.0f,
+                           0.0f,         0.0f,    1.0f, 0.0f,
+                           0.0f,         0.0f,    0.0f, 1.0f };
       float trans [16] = { 1.0f, 0.0f, 0.0f, 0.0f,
                            0.0f, 1.0f, 0.0f, 0.0f,
                            0.0f, 0.0f, 1.0f, 0.0f,
-                           (((x_ndc * width + width) / 2.0f)), ((y_ndc * viewport.Height + viewport.Height) / 2.0f), 0.0f, 1.0f };
+                           (((x_ndc * (float)viewport.Width + (float)viewport.Width) / 2.0f)), ((y_ndc * viewport.Height + viewport.Height) / 2.0f), 0.0f, 1.0f };
 
       for (int i = 0; i < 16; i += 4)
         for (int j = 0; j < 4; j++)
@@ -1454,41 +1478,44 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
           for (int j = 0; j < 4; j++)
             scaled [i+j] = scale2 [i] * orig [j] + scale2 [i+1] * orig [j+4] + scale2 [i+2] * orig [j+8] + scale2 [i+3] * orig [j+12];
 
-        if (map.drawing || needs_center)
+        if (minimap->drawing || needs_center)
           pNotConstantData [0] = scaled [0];
 
-        //if (needs_center)
-          //needs_ui_center = true;
-        //else
-          //needs_ui_center = false;
-
         if (! needs_center)
-          //pNotConstantData [12] = ((x_ndc * width + width) / 2.0f) / (scaled [0] / pNotConstantData [0]);
-        //else
           pNotConstantData [12] = scaled [12];
+
+        if ((! drawing_menu) && nametags->drawing && (nametags->shouldAspectCorrect ())) {
+          //dll_log.Log (L"Pos X: %9.7f <Scale: %9.7f> - %9.7f", scale_trans [12], pNotConstantData [0], scale_trans [12] / pNotConstantData [0]);
+          pNotConstantData [12] = scale_trans [12] * (ar_scale * name_shift_coeff);
+          pNotConstantData [0] /= ar_scale;
+        }
 
         pNotConstantData [1] = scaled [1];
         pNotConstantData [4] = scaled [4];
         pNotConstantData [5] = scaled [5];
 
-
-        pNotConstantData [0] * ar_scale;
-        pNotConstantData [1] * ar_scale;
-        pNotConstantData [4] * ar_scale;
-        pNotConstantData [5] * ar_scale;
+#if 0
+        if (! ((! drawing_menu) && nametags->drawing)) {
+          pNotConstantData [0] *= ar_scale;
+          pNotConstantData [1] *= ar_scale;
+          pNotConstantData [4] *= ar_scale;
+          pNotConstantData [5] *= ar_scale;
+        }
+#endif
       }
 
-      if (map.drawing) {
+      if (minimap->drawing) {
         if (log_frame) {
           dll_log.Log (L" After transformation: (%2.1f,%2.1f)", pNotConstantData [12], pNotConstantData [13]);
         }
-        map.prim_ypos = y_pos;
-        map.prim_xpos = x_pos;
+        minimap->prim_ypos = y_pos;
+        minimap->prim_xpos = x_pos;
       }
 
       ///////pNotConstantData [13] += ((float)viewport.Height - viewport.Height / x_scale) / 2.0f;
 
-      return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pNotConstantData, Vector4fCount);
+      if (widescreen)
+        return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pNotConstantData, Vector4fCount);
     }
 
     //if (pConstantData [12] == 640.0 && pConstantData [13] == 420.0)
@@ -1574,24 +1601,24 @@ D3D9SetPixelShaderConstantF_Detour (IDirect3DDevice9* This,
                  sizeof (float) * 4 * min (Vector4fCount, dd_shader_s::MAX_VEC4S) );
   }
 
-  if (map.drawing) {
+  if (minimap->drawing) {
     // Accurately detect only the center triangle on the mini-map
     if (StartRegister == 4 && Vector4fCount == 1 && pConstantData [0] == 1.0f && pConstantData [1] == 1.0f &&
                                                     pConstantData [2] == 1.0f && pConstantData [3] == 1.0f &&
-        map.drawing) {
-      if (map.prim_ypos > 575.0f && map.prim_ypos < 585.0f && map.prim_xpos > 165.0f && map.prim_xpos < 170.0f) {
+        minimap->drawing) {
+      if (minimap->prim_ypos > 575.0f && minimap->prim_ypos < 585.0f && minimap->prim_xpos > 165.0f && minimap->prim_xpos < 175.0f) {
         if (log_frame)
           dll_log.Log (L" Center Primitive: VS: %x, PS: %x", vs_checksum, ps_checksum);
-        map.center_prim = true;
+        minimap->center_prim = true;
       }
     }
 
     if (StartRegister == 4 && Vector4fCount == 1) {
-      map.ps43 = pConstantData [3];
+      minimap->ps43 = pConstantData [3];
     }
 
     if (StartRegister == 2 && Vector4fCount == 1)
-      map.ps23 = pConstantData [3];
+      minimap->ps23 = pConstantData [3];
   }
 
   return D3D9SetPixelShaderConstantF_Original (This, StartRegister, pConstantData, Vector4fCount);
@@ -1679,6 +1706,8 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
     ad::RenderFix::height = present_params.BackBufferHeight;
     //ad::FrameRateFix::fullscreen = (! pparams->Windowed);
 
+    widescreen = true;
+
     //
     // Optimized centers to avoid post-processing nois
     //
@@ -1692,7 +1721,9 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
     // 21:9
     else if (ar >= (21.0f / 9.0f) - 0.25f && ar <= (21.0f / 9.0f) + 0.25f) {
       dll_log.Log (L" >> Aspect Ratio: 21:9");
-      scale_coeff = 0.373f;
+
+      scale_coeff      = 0.373f;
+      name_shift_coeff = 1.016f;
 
       if (pparams->BackBufferWidth == 1120 && pparams->BackBufferHeight == 480) {
         scale_coeff = 1.151f;
@@ -1708,7 +1739,8 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
     // 16:3
     else if (ar == 16.0f / 3.0f) {
       dll_log.Log (L" >> Aspect Ratio: 16:3");
-      scale_coeff = 0.222;
+      scale_coeff      = 0.222;
+      name_shift_coeff = 1.046f;
     }
 
     else if (ar > 16.0f / 9.0f) {
@@ -1716,6 +1748,7 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
       //scale_coeff = 0.5f;
     } else {
       dll_log.Log (L" >> Aspect Ratio:  16:9 or narrower");
+      widescreen = false;
       scale_coeff = 0.0f;
     }
   }
@@ -1813,6 +1846,7 @@ ad::RenderFix::CommandProcessor::CommandProcessor (void)
   command.AddVariable ("AspectCorrection", aspect_correction);
   command.AddVariable ("CenterUI",         center_ui_);
   command.AddVariable ("ScaleCoeff",       new eTB_VarStub <float> (&scale_coeff));
+  command.AddVariable ("NameShiftCoeff",   new eTB_VarStub <float> (&name_shift_coeff));
   command.AddVariable ("AllowScissor",     new eTB_VarStub <bool>  (&allow_scissor));
   command.AddVariable ("FixMinimap",       new eTB_VarStub <bool>  (&config.render.fix_minimap));
   command.AddVariable ("MinimapShader",    new eTB_VarStub <int>   (&minimap_shader));

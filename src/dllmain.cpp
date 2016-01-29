@@ -26,9 +26,9 @@
 #include "log.h"
 
 #include "render.h"
+#include "gamestate.h"
 
 #include "command.h"
-
 #include "hook.h"
 
 #pragma comment (lib, "kernel32.lib")
@@ -37,8 +37,10 @@ DWORD
 WINAPI
 DllThread (LPVOID user)
 {
+  ad_gamestate_s::init ();
+
   if (AD_Init_MinHook () == MH_OK) {
-    ad::RenderFix::Init    ();
+    ad::RenderFix::Init ();
   }
 
   return 0;
@@ -65,6 +67,9 @@ DllMain (HMODULE hModule,
       config.render.aspect_correction = true;
       config.render.center_ui         = true;
       config.render.fix_minimap       = true;
+
+      config.nametags.always_on_top   = true;
+      config.nametags.aspect_correct  = false;
 
       // Save a new config if none exists
       AD_SaveConfig ();

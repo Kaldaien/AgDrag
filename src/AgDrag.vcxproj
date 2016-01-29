@@ -117,9 +117,14 @@
   <ItemGroup>
     <ClInclude Include="command.h" />
     <ClInclude Include="config.h" />
+    <ClInclude Include="gamestate.h" />
     <ClInclude Include="hook.h" />
+    <ClInclude Include="hud.h" />
+    <ClInclude Include="hud\minimap.h" />
+    <ClInclude Include="hud\nametags.h" />
     <ClInclude Include="ini.h" />
     <ClInclude Include="log.h" />
+    <ClInclude Include="menu.h" />
     <ClInclude Include="MinHook\include\MinHook.h" />
     <ClInclude Include="parameter.h" />
     <ClInclude Include="render.h" />
@@ -135,7 +140,10 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
       </PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="gamestate.cpp" />
     <ClCompile Include="hook.cpp" />
+    <ClCompile Include="hud\minimap.cpp" />
+    <ClCompile Include="hud\nametags.cpp" />
     <ClCompile Include="ini.cpp" />
     <ClCompile Include="log.cpp" />
     <ClCompile Include="parameter.cpp" />

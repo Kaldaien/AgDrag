@@ -91,10 +91,10 @@ AD_ComputeAspectCoeffsEx (float& x, float& y, float& xoff, float& yoff)
     return;
 
   config.render.aspect_ratio = ad::RenderFix::width / ad::RenderFix::height;
-  float rescale = (1.77777778f / config.render.aspect_ratio);
+  float rescale = ((16.0f / 9.0f) / config.render.aspect_ratio);
 
   // Wider
-  if (config.render.aspect_ratio > 1.7777f) {
+  if (config.render.aspect_ratio > (16.0f / 9.0f)) {
     int width = (16.0f / 9.0f) * ad::RenderFix::height;
     int x_off = (ad::RenderFix::width - width) / 2;
 
@@ -562,31 +562,46 @@ public:
 
             BMF_SteamAPI_SetOverlayState (visible);
           }
-          else if (keys_ [VK_MENU] && keys_ ['A'] && new_press) {
+          else if (keys_ [VK_MENU] && vkCode == 'A' && new_press) {
             command.ProcessCommandLine ("AspectCorrection toggle");
-          } else if (keys_ [VK_MENU] && keys_ ['Z'] && new_press) {
+          } else if (keys_ [VK_MENU] && vkCode == 'Z' && new_press) {
             command.ProcessCommandLine ("CenterUI toggle");
-          } else if (keys_ [VK_OEM_COMMA]) {
+          } else if (vkCode == VK_OEM_COMMA) {
             extern float scale_coeff;
             scale_coeff -= 0.001f;
-          } else if (keys_ [VK_OEM_PERIOD]) {
+          } else if (vkCode == VK_OEM_PERIOD) {
             extern float scale_coeff;
             scale_coeff += 0.001f;
-          } else if (keys_ [VK_MENU] && keys_ ['V'] && new_press) {
+          } else if (vkCode == VK_OEM_6) {
+            extern float name_shift_coeff;
+            name_shift_coeff += 0.001f;
+          } else if (vkCode == VK_OEM_4) {
+            extern float name_shift_coeff;
+            name_shift_coeff -= 0.001f;
+          } else if (keys_ [VK_MENU] && vkCode == 'V' && new_press) {
             extern bool vert_fix_map;
             vert_fix_map = ! vert_fix_map;
-          } else if (keys_ [VK_MENU] && keys_ ['L'] && new_press) {
+          } else if (keys_ [VK_MENU] && vkCode == 'L' && new_press) {
             command.ProcessCommandLine ("FramesToLog 1");
             command.ProcessCommandLine ("LogFrame true");
-          } else if (keys_ [VK_MENU] && keys_ ['D'] && new_press) {
+          } else if (keys_ [VK_MENU] && vkCode == 'D' && new_press) {
             command.ProcessCommandLine ("FixDOF toggle");
-          } else if (keys_ [VK_MENU] && keys_ [VK_BACK] && new_press) {
+          } else if (keys_ [VK_MENU] && vkCode == VK_BACK && new_press) {
             float* pfUIAspect = (float *)0x01618ee8;
             DWORD dwOld;
             VirtualProtect (pfUIAspect, 4, PAGE_READWRITE, &dwOld);
             *pfUIAspect = -*pfUIAspect;
             VirtualProtect (pfUIAspect, 4, dwOld, &dwOld);
+          } else if (keys_ [VK_MENU] && vkCode == config.nametags.toggle_on_top_key && new_press) {
+            if (config.nametags.always_on_top++ > 1)
+              config.nametags.always_on_top = 0;
+          } else if (keys_ [VK_MENU] && vkCode == 'M' && new_press) {
+            config.nametags.aspect_correct = (! config.nametags.aspect_correct);
           }
+        }
+
+        if (vkCode == config.nametags.hold_on_top_key && new_press) {
+          config.nametags.temp_on_top = true;
         }
 
         if (visible) {
@@ -605,8 +620,15 @@ public:
         }
       }
 
-      else if ((! keyDown))
+      else if ((! keyDown)) {
+        bool new_release = keys_ [vkCode] != 0x00;
+
         keys_ [vkCode] = 0x00;
+
+        if (vkCode == 'N' && new_release) {
+          config.nametags.temp_on_top = false;
+        }
+      }
 
       if (visible) return 1;
     }

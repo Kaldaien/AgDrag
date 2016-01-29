@@ -25,11 +25,11 @@
 #include "ini.h"
 #include "log.h"
 
-std::wstring AD_VER_STR = L"0.0.9";
+std::wstring AD_VER_STR = L"0.1.0";
 
 static ad::INI::File*  dll_ini = nullptr;
 
-ad_config_t config;
+ad_config_s config;
 
 ad::ParameterFactory g_ParameterFactory;
 
@@ -37,6 +37,13 @@ struct {
   ad::ParameterBool*    aspect_correction;
   ad::ParameterBool*    center_ui;
 } render;
+
+struct {
+  ad::ParameterInt*     always_on_top;
+  ad::ParameterBool*    aspect_correct;
+  ad::ParameterStringW* hold_on_top_key;
+  ad::ParameterStringW* toggle_on_top_key;
+} nametags;
 
 struct {
   ad::ParameterStringW* injector;
@@ -76,6 +83,27 @@ AD_LoadConfig (std::wstring name) {
         L"CenterUI" );
 
 
+  nametags.aspect_correct =
+    static_cast <ad::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Aspect Ratio Correct Nametags")
+      );
+  nametags.aspect_correct->register_to_ini (
+    dll_ini,
+      L"AgDrag.Nametags",
+        L"AspectCorrect" );
+
+  nametags.always_on_top =
+    static_cast <ad::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Don't let the world occlude names")
+      );
+  nametags.always_on_top->register_to_ini (
+    dll_ini,
+      L"AgDrag.Nametags",
+        L"AlwaysOnTop" );
+
+
   sys.version =
     static_cast <ad::ParameterStringW *>
       (g_ParameterFactory.create_parameter <std::wstring> (
@@ -106,6 +134,14 @@ AD_LoadConfig (std::wstring name) {
   if (render.center_ui->load ())
     config.render.center_ui = render.center_ui->get_value ();
 
+
+  if (nametags.aspect_correct->load ())
+    config.nametags.aspect_correct = nametags.aspect_correct->get_value ();
+
+  if (nametags.always_on_top->load ())
+    config.nametags.always_on_top = nametags.always_on_top->get_value ();
+
+
   if (sys.version->load ())
     config.system.version = sys.version->get_value ();
 
@@ -125,6 +161,14 @@ AD_SaveConfig (std::wstring name, bool close_config) {
 
   render.center_ui->set_value         (config.render.center_ui);
   render.center_ui->store             ();
+
+
+  nametags.aspect_correct->set_value  (config.nametags.aspect_correct);
+  nametags.aspect_correct->store      ();
+
+  nametags.always_on_top->set_value   (config.nametags.always_on_top);
+  nametags.always_on_top->store       ();
+
 
   sys.version->set_value       (AD_VER_STR);
   sys.version->store           ();

@@ -25,6 +25,15 @@
     <ClCompile Include="render.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="gamestate.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hud\minimap.cpp">
+      <Filter>Source Files\HUD</Filter>
+    </ClCompile>
+    <ClCompile Include="hud\nametags.cpp">
+      <Filter>Source Files\HUD</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="command.h">
@@ -51,6 +60,21 @@
     <ClInclude Include="MinHook\include\MinHook.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="gamestate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="hud.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="menu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="hud\minimap.h">
+      <Filter>Header Files\HUD</Filter>
+    </ClInclude>
+    <ClInclude Include="hud\nametags.h">
+      <Filter>Header Files\HUD</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Source Files">
@@ -60,6 +84,13 @@
     <Filter Include="Header Files">
       <UniqueIdentifier>{c24a5ec7-49c4-4600-9936-f28a7bdf3d31}</UniqueIdentifier>
       <Extensions>.h</Extensions>
+    </Filter>
+    <Filter Include="Header Files\HUD">
+      <UniqueIdentifier>{bc527380-a49d-45fd-902b-1f139c5455a2}</UniqueIdentifier>
+      <Extensions>hud/*.h</Extensions>
+    </Filter>
+    <Filter Include="Source Files\HUD">
+      <UniqueIdentifier>{d2a2d20e-cecd-440e-9418-24c8568f005a}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
