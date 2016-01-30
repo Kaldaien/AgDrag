@@ -25,7 +25,7 @@
 #include "ini.h"
 #include "log.h"
 
-std::wstring AD_VER_STR = L"0.1.0";
+std::wstring AD_VER_STR = L"0.1.1";
 
 static ad::INI::File*  dll_ini = nullptr;
 
@@ -36,6 +36,7 @@ ad::ParameterFactory g_ParameterFactory;
 struct {
   ad::ParameterBool*    aspect_correction;
   ad::ParameterBool*    center_ui;
+  ad::ParameterBool*    allow_background;
 } render;
 
 struct {
@@ -44,6 +45,11 @@ struct {
   ad::ParameterStringW* hold_on_top_key;
   ad::ParameterStringW* toggle_on_top_key;
 } nametags;
+
+struct {
+  ad::ParameterBool*    block_left_alt;
+  ad::ParameterBool*    block_left_ctrl;
+} keyboard;
 
 struct {
   ad::ParameterStringW* injector;
@@ -82,6 +88,16 @@ AD_LoadConfig (std::wstring name) {
       L"AgDrag.Render",
         L"CenterUI" );
 
+  render.allow_background =
+    static_cast <ad::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Allow background rendering")
+      );
+  render.allow_background->register_to_ini (
+    dll_ini,
+      L"AgDrag.Render",
+        L"AllowBackground" );
+
 
   nametags.aspect_correct =
     static_cast <ad::ParameterBool *>
@@ -102,6 +118,27 @@ AD_LoadConfig (std::wstring name) {
     dll_ini,
       L"AgDrag.Nametags",
         L"AlwaysOnTop" );
+
+
+  keyboard.block_left_alt =
+    static_cast <ad::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Block Left Alt Key")
+      );
+  keyboard.block_left_alt->register_to_ini (
+    dll_ini,
+      L"AgDrag.Keyboard",
+        L"BlockLeftAlt" );
+
+  keyboard.block_left_ctrl =
+    static_cast <ad::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Block Left Ctrl Key")
+      );
+  keyboard.block_left_ctrl->register_to_ini (
+    dll_ini,
+      L"AgDrag.Keyboard",
+        L"BlockLeftCtrl" );
 
 
   sys.version =
@@ -134,12 +171,22 @@ AD_LoadConfig (std::wstring name) {
   if (render.center_ui->load ())
     config.render.center_ui = render.center_ui->get_value ();
 
+  if (render.allow_background->load ())
+    config.render.allow_background = render.allow_background->get_value ();
+
 
   if (nametags.aspect_correct->load ())
     config.nametags.aspect_correct = nametags.aspect_correct->get_value ();
 
   if (nametags.always_on_top->load ())
     config.nametags.always_on_top = nametags.always_on_top->get_value ();
+
+
+  if (keyboard.block_left_alt->load ())
+    config.keyboard.block_left_alt = keyboard.block_left_alt->get_value ();
+
+  if (keyboard.block_left_ctrl->load ())
+    config.keyboard.block_left_ctrl = keyboard.block_left_ctrl->get_value ();
 
 
   if (sys.version->load ())
@@ -162,12 +209,22 @@ AD_SaveConfig (std::wstring name, bool close_config) {
   render.center_ui->set_value         (config.render.center_ui);
   render.center_ui->store             ();
 
+  render.allow_background->set_value  (config.render.allow_background);
+  render.allow_background->store      ();
+
 
   nametags.aspect_correct->set_value  (config.nametags.aspect_correct);
   nametags.aspect_correct->store      ();
 
   nametags.always_on_top->set_value   (config.nametags.always_on_top);
   nametags.always_on_top->store       ();
+
+
+  keyboard.block_left_alt->set_value  (config.keyboard.block_left_alt);
+  keyboard.block_left_alt->store      ();
+
+  keyboard.block_left_ctrl->set_value (config.keyboard.block_left_ctrl);
+  keyboard.block_left_ctrl->store     ();
 
 
   sys.version->set_value       (AD_VER_STR);

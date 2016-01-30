@@ -30,8 +30,9 @@
 struct ad_minimap_s : ad_hud_render_task_s {
   int   shader_changes = 0;
   int   prims_drawn    = 0;
-  float prim_ypos      = 0.0f;
   float prim_xpos      = 0.0f;
+  float prim_ypos      = 0.0f;
+  float prim_zpos      = 0.0f;
 
   float ps23           = 0.0f;
   float ps43           = 0.0f;

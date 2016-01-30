@@ -23,7 +23,8 @@
 #define __AD__HUD_H__
 
 struct ad_hud_render_task_s {
-  bool drawing = false;
+  bool drawing  = false;
+  bool finished = false;
 
   enum {
     TASK_MINIMAP       = 0x1, // Minimap

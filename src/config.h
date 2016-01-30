@@ -34,6 +34,7 @@ struct ad_config_s
     float    aspect_ratio      = (16.0f / 9.0f);
     bool     center_ui         = true;
     bool     fix_minimap       = true;
+    bool     allow_background  = true;
   } render;
 
   struct {
@@ -45,6 +46,21 @@ struct ad_config_s
     uint16_t
              toggle_on_top_key = (uint16_t)'N';
   } nametags;
+
+  struct {
+    int  num_frames = 0;
+    bool shaders    = false;
+    bool ui         = false; // General-purpose UI stuff
+    bool hud        = false;
+    bool menus      = false;
+    bool minimap    = false;
+    bool nametags   = false;
+  } trace;
+
+  struct {
+    bool block_left_alt  = false;
+    bool block_left_ctrl = false;
+  } keyboard;
 
   struct {
     std::wstring

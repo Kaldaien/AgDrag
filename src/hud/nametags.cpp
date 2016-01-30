@@ -32,6 +32,26 @@ ad_nametags_s::shouldDrawOnTop (void)
   return (config.nametags.always_on_top || config.nametags.temp_on_top);
 }
 
+ad_nametags_s::test_result
+ad_nametags_s::trigger (float last_z, float y, float z, float w, float zz)
+{
+  if (! finished) {
+    if (! drawing) {
+      if (last_z == 0.0f && (y != 0.0f) && (! (z == 0.0f || z == 16.0f || z == 32.0f || z == 100.0f)) && zz == 1.0f && w == 1.0f) {
+        drawing = true;
+        return NAMETAGS_BEGIN;
+      }
+    } else {
+      if (z == 0.0f || z == 16.0f || z == 32.0f || z == 100.0f) {
+        drawing = false;
+        return NAMETAGS_END;
+      }
+    }
+  }
+
+  return NAMETAGS_UNKNOWN;
+}
+
 
 DWORD dwLastZEnable  = 0;
 DWORD dwLastZFunc    = 0;
@@ -40,14 +60,43 @@ DWORD dwLastAlphaTest = 0;
 DWORD dwLastAlphaFunc = 0;
 DWORD dwLastAlphaRef  = 0;
 
-DWORD dwLastBlendOp  = 0;
 DWORD dwLastSrcOp    = 0;
 DWORD dwLastDstOp    = 0;
 DWORD dwLastBlend    = 0;
 
+#include "../log.h"
+#include "../hook.h"
+
+#if 0
+typedef void (__cdecl *foo_pfn)(void);
+foo_pfn original_nametag = nullptr;
+
+void
+__fastcall
+nametag_draw (void)
+{
+  extern bool AD_IsDrawingUI (void);
+
+  if (AD_IsDrawingUI ())
+    nametags->drawing = true;
+
+  original_nametag ();
+}
+#endif
+
 void
 ad_nametags_s::beginPrimitive (IDirect3DDevice9* pDev)
 {
+#if 0
+  static bool hooked = false;
+
+  if (! hooked) {
+    AD_CreateFuncHook (L"Nametags", (LPVOID)0x00da925c, nametag_draw, (LPVOID *)&original_nametag );
+    hooked = true;
+    AD_EnableHook ((LPVOID)0x00da925c);
+  }
+#endif
+
   pDev->GetRenderState (D3DRS_ZENABLE, &dwLastZEnable);
   pDev->GetRenderState (D3DRS_ZFUNC,   &dwLastZFunc);
 
@@ -58,17 +107,9 @@ ad_nametags_s::beginPrimitive (IDirect3DDevice9* pDev)
     pDev->GetRenderState (D3DRS_ALPHAFUNC,        &dwLastAlphaFunc);
     pDev->GetRenderState (D3DRS_ALPHAREF,         &dwLastAlphaRef);
 
-    pDev->GetRenderState (D3DRS_DESTBLEND,        &dwLastDstOp);
-    pDev->GetRenderState (D3DRS_ALPHABLENDENABLE, &dwLastBlend);
-
-    //pDev->GetRenderState (D3DRS_ALPHATESTENABLE, );
-
-    pDev->GetRenderState (D3DRS_BLENDOP,          &dwLastBlendOp);
     pDev->GetRenderState (D3DRS_SRCBLEND,         &dwLastSrcOp);
     pDev->GetRenderState (D3DRS_DESTBLEND,        &dwLastDstOp);
     pDev->GetRenderState (D3DRS_ALPHABLENDENABLE, &dwLastBlend);
-
-    //pDev->SetRenderState (D3DRS_BLENDOP,          D3DBLENDOP_REVSUBTRACT);
 
     pDev->SetRenderState (D3DRS_SRCBLEND,         D3DBLEND_INVSRCALPHA);
     pDev->SetRenderState (D3DRS_DESTBLEND,        D3DBLEND_SRCALPHA);
@@ -98,11 +139,8 @@ ad_nametags_s::endPrimitive (IDirect3DDevice9* pDev)
     pDev->SetRenderState (D3DRS_ALPHAFUNC,        dwLastAlphaFunc);
     pDev->SetRenderState (D3DRS_ALPHAREF,         dwLastAlphaRef);
 
-    pDev->SetRenderState (D3DRS_BLENDOP,          dwLastBlendOp);
-
     pDev->SetRenderState (D3DRS_SRCBLEND,         dwLastSrcOp);
     pDev->SetRenderState (D3DRS_DESTBLEND,        dwLastDstOp);
-
     pDev->SetRenderState (D3DRS_ALPHABLENDENABLE, dwLastBlend);
   }
 }

@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 #include "command.h"
 
 template <>
@@ -204,8 +206,8 @@ eTB_CommandProcessor::ProcessCommandLine (const char* szCommandLine)
 {
   if (szCommandLine != NULL && strlen (szCommandLine))
   {
-    char*  command_word     = strdup (szCommandLine);
-    size_t command_word_len = strlen (command_word);
+    char*  command_word     = _strdup (szCommandLine);
+    size_t command_word_len = strlen  (command_word);
 
     char*  command_args     = command_word;
     size_t command_args_len = 0;
@@ -266,22 +268,22 @@ eTB_CommandProcessor::ProcessCommandLine (const char* szCommandLine)
           bool                bool_val = false;
 
           /* False */
-          if (! (stricmp (command_args, "false") && stricmp (command_args, "0") &&
-                 stricmp (command_args, "off"))) {
+          if (! (_stricmp (command_args, "false") && _stricmp (command_args, "0") &&
+                 _stricmp (command_args, "off"))) {
             bool_val = false;
             bool_var->setValue (bool_val);
           }
 
           /* True */
-          else if (! (stricmp (command_args, "true") && stricmp (command_args, "1") &&
-                      stricmp (command_args, "on"))) {
+          else if (! (_stricmp (command_args, "true") && _stricmp (command_args, "1") &&
+                      _stricmp (command_args, "on"))) {
             bool_val = true;
             bool_var->setValue (bool_val);
           }
 
           /* Toggle */
-          else if ( !(stricmp (command_args, "toggle") && stricmp (command_args, "~") &&
-                      stricmp (command_args, "!"))) {
+          else if (! (_stricmp (command_args, "toggle") && _stricmp (command_args, "~") &&
+                      _stricmp (command_args, "!"))) {
             bool_val = ! bool_var->getValue ();
             bool_var->setValue (bool_val);
 
@@ -300,11 +302,11 @@ eTB_CommandProcessor::ProcessCommandLine (const char* szCommandLine)
           int int_val = 0;
 
           /* Increment */
-          if (! (stricmp (command_args, "++") && stricmp (command_args, "inc") &&
-                 stricmp (command_args, "next"))) {
+          if (! (_stricmp (command_args, "++") && _stricmp (command_args, "inc") &&
+                 _stricmp (command_args, "next"))) {
             int_val = original_val + 1;
-          } else if (! (stricmp (command_args, "--") && stricmp (command_args, "dec") &&
-                        stricmp (command_args, "prev"))) {
+          } else if (! (_stricmp (command_args, "--") && _stricmp (command_args, "dec") &&
+                        _stricmp (command_args, "prev"))) {
             int_val = original_val - 1;
           } else
             int_val = atoi (command_args);
@@ -320,11 +322,11 @@ eTB_CommandProcessor::ProcessCommandLine (const char* szCommandLine)
           short short_val    = 0;
 
           /* Increment */
-          if (! (stricmp (command_args, "++") && stricmp (command_args, "inc") &&
-                 stricmp (command_args, "next"))) {
+          if (! (_stricmp (command_args, "++") && _stricmp (command_args, "inc") &&
+                 _stricmp (command_args, "next"))) {
             short_val = original_val + 1;
-          } else if (! (stricmp (command_args, "--") && stricmp (command_args, "dec") &&
-                        stricmp (command_args, "prev"))) {
+          } else if (! (_stricmp (command_args, "--") && _stricmp (command_args, "dec") &&
+                        _stricmp (command_args, "prev"))) {
             short_val = original_val - 1;
           } else
             short_val = (short)atoi (command_args);

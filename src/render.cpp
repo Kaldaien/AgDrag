@@ -39,18 +39,45 @@
 ///// 1/27/16 - 1.  The History / Pawns Used scren is known to be broken, appears to be scissor-rect related
 /////           2.  Pawn nameplates in the Rift are over-corrected (they need no correction)
 
-bool widescreen         = false;
-bool needs_aspect       = false;
-bool needs_center       = false;
-bool scissoring         = false;
+struct {
+  // Properties
+  bool widescreen         = false; // Does NOT change every frame, only when
+                                   //  presentation parameters do.
 
-bool bg_filled          = false;
+  // Behavior Control
+  bool center             = false;
 
-float last_x        = 0.0f;
-float last_z        = 0.0f;
-bool  drawing_quest = false;
+  // State
+  bool  drawing           = false;
+  bool  scissoring        = false;
+  bool  drawing_quest     = false;
+  bool  drawing_menu      = false;
 
-bool  drawing_menu  = false;
+  // Progress
+  bool bg_filled          = false;
+
+  // History
+  float last_x            = 0.0f;
+  float last_y            = 0.0f;
+  float last_z            = 0.0f;
+
+  void reset (void) {
+    center        = false;
+
+    drawing       = false;
+    scissoring    = false;
+
+    // TODO: Use the HUD and Menu stuff for this instead
+    drawing_quest = false;
+    drawing_menu  = false;
+
+    bg_filled     = false;
+  }
+} ui;
+
+bool AD_IsDrawingUI (void) {
+  return ui.drawing;
+}
 
 #include <map>
 std::unordered_map <LPVOID, uint32_t> vs_checksums;
@@ -62,7 +89,7 @@ struct dd_shader_s {
   const wchar_t* description;   // _Brief_ Description
 
   enum {
-    MAX_CONSTS = 64,            // Allow storage for up to 16x vec4
+    MAX_CONSTS = 256,           // Allow storage for up to 64x vec4
     MAX_VEC4S  = MAX_CONSTS / 4
   };
 
@@ -83,6 +110,10 @@ struct dd_shader_s {
 dd_shader_s ps_text = { PS_CRC32_TEXT, L"text" };
 dd_shader_s ps_bg0  = { PS_CRC32_BG0,  L"bg0"  };
 
+#define VS_CRC32_MINIMAP0 0x9a78e585
+
+dd_shader_s vs_minimap0 = { VS_CRC32_MINIMAP0, L"minimap0" };
+
 // Map checksums to shaders
 std::unordered_map <uint32_t, dd_shader_s*> tracked_shader_map;
 
@@ -94,25 +125,36 @@ struct {
 
 D3DVIEWPORT9 viewport;
 
-// Debug hack
-bool allow_scissor = true;
+// Debug stuff
+struct {
+  bool allow_scissor = true;
+  int  num_scenes    = 0;
 
-bool fix_rect = false;
+  int  cull_vs       = 0;
+  int  cull_ps       = 0;
 
-int  minimap_shader = 0x9a78e585;
+  void reset (void) {
+    num_scenes = 0;
+  }
+} debug;
+
 bool vert_fix_map   = false;
 
-bool fix_dof        = true;
-bool kill_dof       = false;
-bool dof_active     = false;
+struct {
+  bool fix_dof    = true;
+  bool kill_dof   = false;
+  bool dof_active = false;
+
+  void reset (void) {
+    dof_active = false;
+  }
+} postproc;
 
 
-bool log_frame       = false;
-int  log_frame_count = 0;
-
-bool fullscreen_blit = false;
-int center_count     = 0;
-
+struct {
+  bool log_frame   = false;
+  int  frame_count = 0;
+} tracer;
 
 void
 AD_ComputeAspectCoeffs (float& x, float& y, float& xoff, float& yoff)
@@ -126,8 +168,8 @@ AD_ComputeAspectCoeffs (float& x, float& y, float& xoff, float& yoff)
   if (! (config.render.aspect_correction))
     return;
 
-  config.render.aspect_ratio = ad::RenderFix::width / ad::RenderFix::height;
-  float rescale = (16.0f / 9.0f) / config.render.aspect_ratio;
+  config.render.aspect_ratio = (float)ad::RenderFix::width / (float)ad::RenderFix::height;
+  float rescale              = (16.0f / 9.0f) / config.render.aspect_ratio;
 
   // Wider
   if (config.render.aspect_ratio > (16.0 / 9.0f)) {
@@ -247,6 +289,12 @@ D3D9SetVertexShader_Detour (IDirect3DDevice9*       This,
           vs_checksums [pShader] = crc32 (0, pbFunc, len);
 
           free (pbFunc);
+
+          if (vs_checksums [pShader] == vs_minimap0.crc32)
+            tracked_shader_map [vs_checksums [pShader]] = &vs_minimap0;
+
+          else
+            tracked_shader_map [vs_checksums [pShader]] = nullptr;
         }
       }
     }
@@ -256,9 +304,17 @@ D3D9SetVertexShader_Detour (IDirect3DDevice9*       This,
   }
 
   if (vs_checksum != vs_checksums [pShader])
-    needs_center = false;
+    ui.center = false;
 
   vs_checksum = vs_checksums [pShader];
+
+
+  // Cache the tracked shader
+  if (tracked_shader_map.find (vs_checksum) != tracked_shader_map.end ())
+    current_shader.vs = tracked_shader_map [vs_checksum];
+  else
+    current_shader.vs = nullptr;
+
 
   g_pVS = pShader;
   return D3D9SetVertexShader_Original (This, pShader);
@@ -310,18 +366,36 @@ D3D9SetPixelShader_Detour (IDirect3DDevice9*      This,
     }
   }
 
+  //game->menu == menu_map;
+
   // Pixel Shader Changed
   if (ps_checksum != ps_checksums [pShader]) {
     if (minimap->drawing) {
       ++minimap->shader_changes;
-      if (minimap->shader_changes > 2)
-        minimap->drawing = false;
+      if (ui.drawing) {
+        if (minimap->shader_changes > 2) {
+          minimap->finished = true;
+          minimap->drawing  = false;
+        }
+      } else {
+        if (ps_checksum == 0xf88d8bcd){//0x9a78e585 && (minimap->prim_zpos < 0.0f || minimap->prim_zpos > 16.0f)) {
+          if (tracer.log_frame && config.trace.minimap) {
+            dll_log.Log ( L" Ending map menu draw <%f,%f,%f> (vs: %x, ps: %x)",
+                            minimap->prim_xpos,
+                              minimap->prim_ypos,
+                                minimap->prim_zpos,
+                                  vs_checksum,
+                                    ps_checksum );
+          }
+          ui.drawing        = true;
+          minimap->finished = true;
+          minimap->drawing  = false;
+        }
+      }
     }
-
-    //needs_center = false;
   }
 
-  dof_active = false;
+  postproc.dof_active = false;
 
   ps_checksum = ps_checksums [pShader];
 
@@ -357,8 +431,6 @@ typedef HRESULT (STDMETHODCALLTYPE *EndScene_t)
 
 EndScene_t D3D9EndScene_Original = nullptr;
 
-int scene_count = 0;
-
 COM_DECLSPEC_NOTHROW
 HRESULT
 STDMETHODCALLTYPE
@@ -367,6 +439,11 @@ D3D9EndScene_Detour (IDirect3DDevice9* This)
   // Ignore anything that's not the primary render device.
   if (This != ad::RenderFix::pDevice)
     return D3D9EndScene_Original (This);
+
+  ++debug.num_scenes;
+
+  if (tracer.log_frame && tracer.frame_count > 0)
+    dll_log.Log (L" --- EndScene #%d ---", debug.num_scenes);
 
   HRESULT hr = D3D9EndScene_Original (This);
 
@@ -390,25 +467,13 @@ D3D9EndFrame_Post (HRESULT hr, IUnknown* device)
   if (device != ad::RenderFix::pDevice)
     return BMF_EndBufferSwap (hr, device);
 
-  needs_aspect       = false;
-  needs_center       = false;
-  bg_filled          = false;
-
-  last_x        = 0.0f;
-  last_z        = 0.0f;
-  drawing_quest = false; // This happens before nametags
-
-  drawing_menu = false;
+  debug.reset     ();
+  ui.reset        ();
 
   minimap->reset  ();
   nametags->reset ();
 
-  scissoring         = false;
-  fix_rect           = false;
-  dof_active         = false;
-
-  center_count       = 0;
-  fullscreen_blit    = false;
+  postproc.reset  ();
 
   g_pPS           = nullptr;
   g_pVS           = nullptr;
@@ -417,11 +482,10 @@ D3D9EndFrame_Post (HRESULT hr, IUnknown* device)
 
   ad::RenderFix::dwRenderThreadID = GetCurrentThreadId ();
 
-  if (log_frame && log_frame_count > 0) {
-    log_frame_count--;
+  if (tracer.log_frame && tracer.frame_count > 0) {
     dll_log.Log (L" --- SwapChain Present ---");
-    if (log_frame_count <= 0)
-      log_frame = false;
+    if (--tracer.frame_count <= 0)
+      tracer.log_frame = false;
   }
 
   AD_DrawCommandConsole ();
@@ -694,7 +758,7 @@ D3D9SetScissorRect_Detour (IDirect3DDevice9* This,
   if (This != ad::RenderFix::pDevice)
     return D3D9SetScissorRect_Original (This, pRect);
 
-  if (! allow_scissor) {
+  if (! debug.allow_scissor) {
     RECT empty;
     empty.bottom = 0;
     empty.top = 0;
@@ -738,9 +802,9 @@ D3D9SetScissorRect_Detour (IDirect3DDevice9* This,
   // If the rectangle has a non-zero area, we are interested in reverse engineering
   // vertex shaders currently active...
   if (pRect->left < pRect->right && pRect->top < pRect->bottom)
-    scissoring = true;
+    ui.scissoring = true;
   else
-    scissoring = false;
+    ui.scissoring = false;
 
   float Width  = 0.0f;
   float Height = 0.0f;
@@ -751,8 +815,8 @@ D3D9SetScissorRect_Detour (IDirect3DDevice9* This,
 
     D3DSURFACE_DESC desc;
     if (SUCCEEDED (pSurf->GetDesc (&desc))) {
-      float Width  = desc.Width;
-      float Height = desc.Height;
+      float Width  = (float)desc.Width;
+      float Height = (float)desc.Height;
     }
   }
 
@@ -808,55 +872,7 @@ D3D9SetViewport_Detour (IDirect3DDevice9* This,
   return hr;
 }
 
-void
-AD_AdjustViewport (IDirect3DDevice9* This, bool UI)
-{
-  return;
-
-  D3DVIEWPORT9 vp9_orig;
-  This->GetViewport (&vp9_orig);
-
-  if (! UI) {
-    return;
-    vp9_orig.MinZ = 0.0f;
-    vp9_orig.MaxZ = 1.0f;
-    vp9_orig.X = 0;
-    vp9_orig.Y = 0;
-    vp9_orig.Width  = ad::RenderFix::width;
-    vp9_orig.Height = ad::RenderFix::height;
-    D3D9SetViewport_Original (This, &vp9_orig);
-    return;
-  }
-
-  DWORD width = vp9_orig.Width;
-  DWORD height = (9.0f / 16.0f) * vp9_orig.Width;
-
-  // We can't do this, so instead we need to sidebar the stuff
-  if (height > vp9_orig.Height) {
-    width = (16.0f / 9.0f) * vp9_orig.Height;
-    height = vp9_orig.Height + (vp9_orig.Height - height);
-  }
-
-  if (height != vp9_orig.Height) {
-    D3DVIEWPORT9 vp9;
-    vp9.X     = vp9_orig.X;    vp9.Y      = vp9_orig.Y + (vp9_orig.Height - height) / 2;
-    vp9.Width = width;         vp9.Height = height;
-    vp9.MinZ  = vp9_orig.MinZ; vp9.MaxZ   = vp9_orig.MaxZ;
-
-    D3D9SetViewport_Original (This, &vp9);
-  }
-
-  // Sidebar Videos
-  if (width != vp9_orig.Width) {
-    D3DVIEWPORT9 vp9;
-    vp9.X     = vp9_orig.X + (vp9_orig.Width - width) / 2; vp9.Y = vp9_orig.Y;
-    vp9.Width = width;                                     vp9.Height = height;
-    vp9.MinZ  = vp9_orig.MinZ;                             vp9.MaxZ   = vp9_orig.MaxZ;
-
-    D3D9SetViewport_Original (This, &vp9);
-  }
-}
-
+#if 0
 typedef HRESULT (STDMETHODCALLTYPE *StretchRect_t)
   (      IDirect3DDevice9    *This,
          IDirect3DSurface9   *pSourceSurface,
@@ -927,6 +943,7 @@ D3D9StretchRect_Detour (      IDirect3DDevice9    *This,
                                         pDestRect,
                                           Filter );
 }
+#endif
 
 typedef HRESULT (STDMETHODCALLTYPE *DrawPrimitive_t)
                 ( IDirect3DDevice9* This,
@@ -955,9 +972,19 @@ D3D9DrawPrimitive_Detour ( IDirect3DDevice9* This,
   }
 
   //
+  // Kill Debug VS or PS
+  //
+  if (vs_checksum == debug.cull_vs || ps_checksum == debug.cull_ps) {
+    if (tracer.log_frame && config.trace.shaders) {
+      dll_log.Log (L"Killed Shader: (vs: %x, ps: %x)", vs_checksum, ps_checksum);
+    }
+    return S_OK;
+  }
+
+  //
   // Kill Depth of Field Pass
   //
-  if (dof_active && kill_dof) {
+  if (postproc.dof_active && postproc.kill_dof) {
     return S_OK;
   }
 
@@ -967,20 +994,21 @@ D3D9DrawPrimitive_Detour ( IDirect3DDevice9* This,
     float x_off, y_off;
     AD_ComputeAspectCoeffs (x, y, x_off, y_off);
 
-    if (config.render.center_ui) {
+    if (config.render.center_ui && (ui.drawing || minimap->prim_zpos == 0.0f) /* Stupid hack */) {
       vp.Width /= x;
       vp.X     += x_off;
     }
 
-    if (log_frame) {
-      dll_log.Log ( L" Minimap Item %d: (%f, %f) [vs: %x, ps: %x]", minimap->prims_drawn,
-                                                                    minimap->prim_xpos,
-                                                                    minimap->prim_ypos,
-                                                                    vs_checksum,
-                                                                    ps_checksum );
+    if (tracer.log_frame && config.trace.minimap) {
+      dll_log.Log ( L" Minimap Item %d: (%f, %f, %f) [vs: %x, ps: %x]", minimap->prims_drawn,
+                                                                        minimap->prim_xpos,
+                                                                        minimap->prim_ypos,
+                                                                        minimap->prim_zpos,
+                                                                        vs_checksum,
+                                                                        ps_checksum );
     }
 
-    if ((minimap->ps23 == 1.0f && minimap->ps43 == 1.0f && vert_fix_map) || minimap->center_prim) {
+    if ((minimap->ps23 == 1.0f && minimap->ps43 == 1.0f && vert_fix_map) || minimap->center_prim || (! ui.drawing) /* Stupid hack */) {
       //if (! vert_fix_map)
         //vp.Height -= ((float)viewport.Height - vp.Height / x) / 2.0f;
     }
@@ -1073,9 +1101,19 @@ D3D9DrawIndexedPrimitive_Detour (IDirect3DDevice9* This,
   }
 
   //
+  // Kill Debug VS or PS
+  //
+  if (vs_checksum == debug.cull_vs || ps_checksum == debug.cull_ps) {
+    if (tracer.log_frame && config.trace.shaders) {
+      dll_log.Log (L"Killed Shader: (vs: %x, ps: %x)", vs_checksum, ps_checksum);
+    }
+    return S_OK;
+  }
+
+  //
   // Kill Depth of Field Pass
   //
-  if (dof_active && kill_dof) {
+  if (postproc.dof_active && postproc.kill_dof) {
     return S_OK;
   }
 
@@ -1085,17 +1123,31 @@ D3D9DrawIndexedPrimitive_Detour (IDirect3DDevice9* This,
   //  -- All of the orbiting blips on the map are non-indexed
   //
   if (minimap->drawing) {
+    if (tracer.log_frame && config.trace.minimap) {
+      dll_log.Log ( L" Minimap Background %d: (%f, %f, %f) [vs: %x, ps: %x]", minimap->prims_drawn,
+                                                                              minimap->prim_xpos,
+                                                                              minimap->prim_ypos,
+                                                                              minimap->prim_zpos,
+                                                                              vs_checksum,
+                                                                              ps_checksum );
+    }
+
     D3DVIEWPORT9 vp = viewport;
     float x, y;
     float x_off, y_off;
     AD_ComputeAspectCoeffs (x, y, x_off, y_off);
 
-    if (config.render.center_ui) {
-      vp.Width /= x;
-      vp.X     += x_off;
-    }
+    if (! ui.drawing) { // Main map
+      //vp.Y      += ((float)viewport.Height - vp.Height / x);
+      vp.Height *= x;
+    } else {
+      if (config.render.center_ui ) {
+        vp.Width /= x;
+        vp.X     += x_off;
+      }
 
-    vp.Y  += ((float)viewport.Height - vp.Height / x) / 2.0f;
+      vp.Y  += ((float)viewport.Height - vp.Height / x) / 2.0f;
+    }
 
     D3D9SetViewport_Original (This, &vp);
 
@@ -1117,14 +1169,6 @@ D3D9DrawIndexedPrimitive_Detour (IDirect3DDevice9* This,
     D3D9SetViewport_Original (This, &vp);
   }
 #endif
-
-  DWORD dwLastZEnable  = 0;
-  DWORD dwLastZFunc    = 0;
-
-  DWORD dwLastBlendOp  = 0;
-  DWORD dwLastSrcOp    = 0;
-  DWORD dwLastDstOp    = 0;
-  DWORD dwLastBlend    = 0;
 
   if (nametags->drawing && nametags->shouldDrawOnTop ()) {
     // Draw once normally
@@ -1197,14 +1241,14 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
   //
   // Post-Processing Fix (e.g. DoF)
   //
-  if ((float)viewport.Width / (float)viewport.Height > (16.0f / 9.0f) && fix_dof && StartRegister == 1 && Vector4fCount == 1 && pConstantData [2] == 0.0f && pConstantData [3] == 0.0f && needs_aspect) {
+  if (ui.drawing && (float)viewport.Width / (float)viewport.Height > (16.0f / 9.0f) && postproc.fix_dof && StartRegister == 1 && Vector4fCount == 1 && pConstantData [2] == 0.0f && pConstantData [3] == 0.0f) {
     float inv_x         = 1.0f / pConstantData [0];
     float inv_y         = 1.0f / pConstantData [1];
     const float aspect  = 16.0f / 9.0f;
     const float epsilon = 2.0f;
     if ( inv_y <= (inv_x / aspect + epsilon) &&
          inv_y >= (inv_x / aspect - epsilon) ) {
-      dof_active = true;
+      postproc.dof_active = true;
       //dll_log.Log (L"DoF Vertex Shader: %x - ps: %x", vs_checksum, ps_checksum);
       //dll_log.Log (L"Fixed Depth Of Field...");
 
@@ -1219,7 +1263,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
 
       //dll_log.Log (L" Y Before: %f, Y After: %f", inv_y, 1.0f / pFixedConstants [1]);
 
-      if (widescreen)
+      if (ui.widescreen)
         return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pFixedConstants, Vector4fCount);
     }
   }
@@ -1228,7 +1272,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
   //
   // Map and Mini-Map Fix
   //
-  if (config.render.fix_minimap && config.render.aspect_correction && vs_checksum == minimap_shader) {
+  if (config.render.fix_minimap && config.render.aspect_correction && current_shader.vs == &vs_minimap0) {
     if (StartRegister == 2 && pConstantData [1] >= -(1.0f / (float)ad::RenderFix::height/*(float)viewport.Height*/) - 0.000001 && pConstantData [1] <= -(1.0f / (float)ad::RenderFix::height/*(float)viewport.Height*/) + 0.000001) {
 #if 0
         dll_log.Log ( L" SetVertexShaderConstantF (%li) - Start: %lu, Count: %lu",
@@ -1250,17 +1294,17 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
       AD_ComputeAspectCoeffs (x_scale, y_scale, x_off, y_off);
 
       // Vertical Fix
-      for (int i = 1; i < Vector4fCount * 4; i += 2) {
+      for (UINT i = 1; i < Vector4fCount * 4; i += 2) {
         pNotConstantData [i] = pConstantData [i] / x_scale;
       }
 
-      for (int i = 0; i < Vector4fCount * 4; i += 2) {
+      for (UINT i = 0; i < Vector4fCount * 4; i += 2) {
         pNotConstantData [i] = pConstantData [i] / y_scale;
       }
 
       minimap->drawing = true;
 
-      if (widescreen)
+      if (ui.widescreen)
         return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pNotConstantData, Vector4fCount);
     }
   }
@@ -1279,17 +1323,17 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
 #endif
 
   // Quest indicators are 128x128 textures billboarded before nametags (phase 1 of 2)
-  if (needs_aspect && StartRegister == 11 && Vector4fCount == 1) {
+  if (ui.drawing && StartRegister == 11 && Vector4fCount == 1) {
     if (pConstantData [0] == 0.0078125f) // 1.0 / 128.0
-      drawing_quest = true;
+      ui.drawing_quest = true;
   }
 
 #if 1
-  if (needs_aspect) {
-    if (log_frame) {
+  if (ui.drawing) {
+    if (tracer.log_frame && config.trace.ui) {
       dll_log.Log ( L" SetVertexShaderConstantF (vs: %x - [ps: %x]) - Start: %lu, Count: %lu",
                             vs_checksum, ps_checksum, StartRegister, Vector4fCount );
-      for (int i = 0; i < Vector4fCount; i++) {
+      for (UINT i = 0; i < Vector4fCount; i++) {
         dll_log.Log ( L"   %9.5f, %9.5f, %9.5f, %9.5f",
                               pConstantData [i * 4 + 0], pConstantData [i * 4 + 1],
                               pConstantData [i * 4 + 2], pConstantData [i * 4 + 3] );
@@ -1298,26 +1342,64 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
   }
 #endif
 
-  if (needs_aspect && config.render.aspect_correction && viewport.Width / viewport.Height == ad::RenderFix::width / ad::RenderFix::height && (StartRegister == 1/* || StartRegister == 9*/)) {
+  do {
+    if (minimap->drawing) {
+      minimap->prim_xpos = pConstantData [12];
+      minimap->prim_ypos = pConstantData [13];
+      minimap->prim_zpos = pConstantData [14];
+    }
+
+  if (ui.drawing && config.render.aspect_correction && viewport.Width / viewport.Height == ad::RenderFix::width / ad::RenderFix::height && (StartRegister == 1/* || StartRegister == 9*/)) {
+    if (minimap->drawing) {
+      // Turn off aspect ratio correction if the "minimap" is drawn with these shaders,
+      //   because it's not the minimap, but rather the menu map.
+      if (vs_checksum == 0x9a78e585 && ps_checksum == 0xcca36c71) {
+        ui.drawing = false;
+        break;
+      }
+    }
 
     //last_vs = 0x5c8f22bc && last_ps == 0xbf9778a
 
     //
     // Common UI depths (EXACTLY: 0, 16, 32, 100)
     //
-    if ((! nametags->finished) && last_z == 0.0f && (! (pConstantData [14] == 16.0f || pConstantData [14] == 0.0f || pConstantData [14] == 100.0f || pConstantData [14] == 32.0f)) && pConstantData [10] == 1.0f && pConstantData [15] == 1.0f) {
-      nametags->drawing = true;
+    ad_nametags_s::test_result trigger =
+      ad_nametags_s::NAMETAGS_UNKNOWN;
+
+    trigger = nametags->trigger ( ui.last_z,
+                                    pConstantData [13],
+                                      pConstantData [14],
+                                        pConstantData [15],
+                                          pConstantData [10] );
+
+    if  (trigger == ad_nametags_s::NAMETAGS_BEGIN) {
+      if (tracer.log_frame && config.trace.nametags)
+        dll_log.Log ( L" Nametag mode triggered by UI draw at <%f,%f,%f> (vs=%x, ps=%x)",
+                        pConstantData [12],
+                          pConstantData [13],
+                            pConstantData [14],
+                              vs_checksum,
+                                ps_checksum );
     }
 
-    last_x = pConstantData [12];
-    last_z = pConstantData [14];
+    ui.last_x = pConstantData [12];
+    ui.last_y = pConstantData [13];
+    ui.last_z = pConstantData [14];
 
-    if (nametags->drawing && (pConstantData [14] == 16.0f || pConstantData [14] == 0.0f || pConstantData [14] == 100.0f || pConstantData [14] == 32.0f)) {
-      if (! drawing_quest)
+    if (trigger == ad_nametags_s::NAMETAGS_END) {
+      if (! ui.drawing_quest)
         nametags->finished = true;
 
-      nametags->drawing = false;
-      drawing_quest     = false;
+      ui.drawing_quest = false;
+
+      if (tracer.log_frame && config.trace.nametags)
+        dll_log.Log ( L" Nametag mode ended by UI draw at <%f,%f,%f> (vs=%x, ps=%x)",
+                        pConstantData [12],
+                          pConstantData [13],
+                            pConstantData [14],
+                              vs_checksum,
+                                ps_checksum );
     }
 
     float ar       = (float)viewport.Width / (float)viewport.Height;
@@ -1328,7 +1410,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
     if (Vector4fCount == 4 && (pConstantData [3] == 0.0f || pConstantData [7] == 0.0f)) {
       float pNotConstantData [16];
 
-      for (int i = 0; i < Vector4fCount * 4; i++) {
+      for (UINT i = 0; i < Vector4fCount * 4; i++) {
         pNotConstantData [i] = pConstantData [i];
       }
 
@@ -1359,20 +1441,20 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
 
       //width = (16.0f / 9.0f) * viewport.Height;
 
-      needs_center = false;
-      
-      if (config.render.center_ui) {
-        needs_center = true;
+      ui.center = false;
 
-        if (needs_center) {
+      if (config.render.center_ui) {
+        ui.center = true;
+
+        if (ui.center) {
           // The background on menu screens uses this scale, and we always want to stretch it
           if (pConstantData [0] == 1.0f && pConstantData [5] == 1.5f) {
-            drawing_menu = true;
-            needs_center = false;
+            ui.drawing_menu = true;
+            ui.center       = false;
           }
 
-          if ((! drawing_menu) && nametags->drawing && (! nametags->finished))
-            needs_center = false;
+          if ((! ui.drawing_menu) && nametags->drawing && (! nametags->finished))
+            ui.center = false;
 
           //if (! (pConstantData [0] == 1.0f && pConstantData [5] == 1.0f && pConstantData [10] == 1.0f)) // Fix for Map Screen Scaling
             //needs_center = false;
@@ -1380,42 +1462,47 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
       }
 
       if (pConstantData [14] < 0.0f || pConstantData [10] > 1.0f) {
-        if (log_frame)
+        if (tracer.log_frame && config.trace.ui)
           dll_log.Log (L" Depth: %11.9f <Scale: %11.9f>", pConstantData [14], pConstantData [10]);
-        needs_center = false;
+        ui.center = false;
       }
 
       // Map drawing is special, we will use a viewport to handle this,
       //   so do not mess with its X coordinate.
       if (minimap->drawing) {
-        needs_center = false;
+        ui.center = false;
       }
 
       // Background UI stuff
-      if (current_shader.ps == &ps_bg0 && ((! bg_filled) || drawing_menu)) {
-        needs_center = false;
-        bg_filled    = true;
+      if (current_shader.ps == &ps_bg0 && (! ui.bg_filled)) {
+        ui.center    = false;
+        ui.bg_filled = true;
       }
-
-      bool forbid_center = false;
 
       // All fullscreen effects have translation of 640 horizontally and 360 vertically...
       //   this is precisely 1/2 of the Xbox 360's native resolution.
-      if (pConstantData [12] == 640.0f && pConstantData [13] == 360.0f && (pConstantData [14] < 100.0f) && (ps_checksum != 0xf88d8bcd)) {
-        needs_center = false;
+      if (pConstantData [12] == 640.0f && pConstantData [13] == 360.0f && (pConstantData [14] <= 32.0f) && (ps_checksum != 0xf22375e3)) {
+        if (tracer.log_frame && config.trace.ui)
+          dll_log.Log ( L" Fullscreen effect detected: <%f,%f,%f> (vs=%x, ps=%x)",
+                          pConstantData [12],
+                            pConstantData [13],
+                              pConstantData [14],
+                                vs_checksum, ps_checksum );
+
+        ui.center = false;
       }
 
-      if (log_frame && (! needs_center) && (! minimap->drawing)) {
+      if (tracer.log_frame && config.trace.ui && (! ui.center) && (! minimap->drawing)) {
           dll_log.Log ( L" SetVertexShaderConstantF (vs: %x - [ps: %x]) - Start: %lu, Count: %lu",
                             vs_checksum, ps_checksum, StartRegister, Vector4fCount );
-            for (int i = 0; i < Vector4fCount; i++) {
+            for (UINT i = 0; i < Vector4fCount; i++) {
               dll_log.Log ( L"   %9.5f, %9.5f, %9.5f, %9.5f",
                               pConstantData [i * 4 + 0], pConstantData [i * 4 + 1],
                               pConstantData [i * 4 + 2], pConstantData [i * 4 + 3] );
             }
         }
 
-      if (log_frame && vs_checksum == 0x5c8f22bc && ps_checksum == 0xbf9778a) {
+      if (tracer.log_frame && config.trace.ui && vs_checksum == 0x5c8f22bc && ps_checksum == 0xbf9778a) {
         dll_log.Log (L"UI Element @ (%2.1f,%2.1f :: %2.1f <%2.1f>) [%lux%lu]", x_pos, y_pos, pConstantData [14], pConstantData [10], viewport.Width, viewport.Height);
         dll_log.Log (L"           # (%2.1f,%2.1f || %2.1f, %2.1f)",                          pConstantData [0], pConstantData [5], pConstantData [4], pConstantData [1]);
         dll_log.Log (L"           % (%2.1f,%2.1f <> %2.1f, %2.1f {%2.1f}",                   pConstantData [2], pConstantData [3], pConstantData [6], pConstantData [7], pConstantData [15]);
@@ -1430,7 +1517,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
         dll_log.Log (L" Rotated: (%2.1f, %2.1f)", xx, yy);
       }
 
-      if (needs_center)
+      if (ui.center)
         pNotConstantData [0] /= ar_scale;
       //else if (nametags->drawing) {
         //pNotConstantData [0] /= ar_scale;
@@ -1457,7 +1544,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
         for (int j = 0; j < 4; j++)
           scale_trans [i+j] = scale [i] * trans [j] + scale [i+1] * trans [j+4] + scale [i+2] * trans [j+8] + scale [i+3] * trans [j+12];
 
-      if (needs_center)
+      if (ui.center)
         pNotConstantData [12] = ((x_ndc * (float)viewport.Width + (float)viewport.Width) / 2.0f) + x_off * scale_coeff;
 
       pNotConstantData [13] = scale_trans [13];
@@ -1478,13 +1565,13 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
           for (int j = 0; j < 4; j++)
             scaled [i+j] = scale2 [i] * orig [j] + scale2 [i+1] * orig [j+4] + scale2 [i+2] * orig [j+8] + scale2 [i+3] * orig [j+12];
 
-        if (minimap->drawing || needs_center)
+        if (minimap->drawing || ui.center)
           pNotConstantData [0] = scaled [0];
 
-        if (! needs_center)
+        if (! ui.center)
           pNotConstantData [12] = scaled [12];
 
-        if ((! drawing_menu) && nametags->drawing && (nametags->shouldAspectCorrect ())) {
+        if ((! ui.drawing_menu) && nametags->drawing && (nametags->shouldAspectCorrect ())) {
           //dll_log.Log (L"Pos X: %9.7f <Scale: %9.7f> - %9.7f", scale_trans [12], pNotConstantData [0], scale_trans [12] / pNotConstantData [0]);
           pNotConstantData [12] = scale_trans [12] * (ar_scale * name_shift_coeff);
           pNotConstantData [0] /= ar_scale;
@@ -1505,22 +1592,20 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
       }
 
       if (minimap->drawing) {
-        if (log_frame) {
+        if (tracer.log_frame && config.trace.minimap) {
           dll_log.Log (L" After transformation: (%2.1f,%2.1f)", pNotConstantData [12], pNotConstantData [13]);
         }
-        minimap->prim_ypos = y_pos;
-        minimap->prim_xpos = x_pos;
       }
 
       ///////pNotConstantData [13] += ((float)viewport.Height - viewport.Height / x_scale) / 2.0f;
 
-      if (widescreen)
+      if (ui.widescreen)
         return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pNotConstantData, Vector4fCount);
     }
 
     //if (pConstantData [12] == 640.0 && pConstantData [13] == 420.0)
       //dll_log.Log (L"UI Shader Detected: (vs=%x,ps=%x)", vs_checksum, ps_checksum);
-  }
+  }} while (false);
 
   return D3D9SetVertexShaderConstantF_Original (This, StartRegister, pConstantData, Vector4fCount);
 }
@@ -1551,7 +1636,7 @@ D3D9SetPixelShaderConstantF_Detour (IDirect3DDevice9* This,
                                                         Vector4fCount );
   }
 
-  if (scissoring) {
+  if (ui.scissoring) {
 #if 0
     dll_log.Log ( L" SetPixelShaderConstantF (%x) - Start: %lu, Count: %lu",
                    ps_checksum, StartRegister, Vector4fCount );
@@ -1568,24 +1653,21 @@ D3D9SetPixelShaderConstantF_Detour (IDirect3DDevice9* This,
   if (StartRegister == 1 && Vector4fCount == 1) {
     if (pConstantData [0] == 0.5f && pConstantData [1] == 2.0f &&
         pConstantData [2] == 1.0f && pConstantData [3] == 1.0f) {
-      if (! needs_aspect) {
-        if (log_frame)
+      if (! ui.drawing) {
+        if (tracer.log_frame && config.trace.ui)
           dll_log.Log (L"Forcing ARC On Because of Pixel Shader");
       }
-      needs_aspect    = true;
-      fullscreen_blit = true;
-    } else {
-      fullscreen_blit = false;
+      ui.drawing = true;
     }
   }
 
   // If this is a tracked pixel shader ...
   if (current_shader.ps != nullptr) {
-    if (log_frame) {
+    if (tracer.log_frame && config.trace.shaders) {
       dll_log.Log ( L" Tracked PS (%x - \"%s\") Constant Set - Start: %lu, Count: %lu",
                       current_shader.ps->crc32, current_shader.ps->description, StartRegister, Vector4fCount );
 
-      for (int i = 0; i < Vector4fCount; i++) {
+      for (UINT i = 0; i < Vector4fCount; i++) {
         dll_log.Log ( L"    %f, %f, %f, %f", pConstantData [i*4+0], pConstantData [i*4+1],
                                              pConstantData [i*4+2], pConstantData [i*4+3] );
       }
@@ -1607,7 +1689,7 @@ D3D9SetPixelShaderConstantF_Detour (IDirect3DDevice9* This,
                                                     pConstantData [2] == 1.0f && pConstantData [3] == 1.0f &&
         minimap->drawing) {
       if (minimap->prim_ypos > 575.0f && minimap->prim_ypos < 585.0f && minimap->prim_xpos > 165.0f && minimap->prim_xpos < 175.0f) {
-        if (log_frame)
+        if (tracer.log_frame && config.trace.minimap)
           dll_log.Log (L" Center Primitive: VS: %x, PS: %x", vs_checksum, ps_checksum);
         minimap->center_prim = true;
       }
@@ -1706,7 +1788,7 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
     ad::RenderFix::height = present_params.BackBufferHeight;
     //ad::FrameRateFix::fullscreen = (! pparams->Windowed);
 
-    widescreen = true;
+    ui.widescreen = true;
 
     //
     // Optimized centers to avoid post-processing nois
@@ -1739,7 +1821,7 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
     // 16:3
     else if (ar == 16.0f / 3.0f) {
       dll_log.Log (L" >> Aspect Ratio: 16:3");
-      scale_coeff      = 0.222;
+      scale_coeff      = 0.222f;
       name_shift_coeff = 1.046f;
     }
 
@@ -1748,8 +1830,8 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
       //scale_coeff = 0.5f;
     } else {
       dll_log.Log (L" >> Aspect Ratio:  16:9 or narrower");
-      widescreen = false;
-      scale_coeff = 0.0f;
+      ui.widescreen = false;
+      scale_coeff   = 0.0f;
     }
   }
 
@@ -1771,10 +1853,12 @@ ad::RenderFix::Init (void)
                       D3D9SetScissorRect_Detour,
             (LPVOID*)&D3D9SetScissorRect_Original );
 
+#if 0
   AD_CreateDLLHook ( config.system.injector.c_str (),
                      "D3D9StretchRect_Override",
                       D3D9StretchRect_Detour,
             (LPVOID*)&D3D9StretchRect_Original );
+#endif
 
   AD_CreateDLLHook ( config.system.injector.c_str (),
                      "D3D9DrawPrimitive_Override",
@@ -1847,19 +1931,30 @@ ad::RenderFix::CommandProcessor::CommandProcessor (void)
   command.AddVariable ("CenterUI",         center_ui_);
   command.AddVariable ("ScaleCoeff",       new eTB_VarStub <float> (&scale_coeff));
   command.AddVariable ("NameShiftCoeff",   new eTB_VarStub <float> (&name_shift_coeff));
-  command.AddVariable ("AllowScissor",     new eTB_VarStub <bool>  (&allow_scissor));
+  command.AddVariable ("AllowScissor",     new eTB_VarStub <bool>  (&debug.allow_scissor));
   command.AddVariable ("FixMinimap",       new eTB_VarStub <bool>  (&config.render.fix_minimap));
-  command.AddVariable ("MinimapShader",    new eTB_VarStub <int>   (&minimap_shader));
   command.AddVariable ("VertFixMap",       new eTB_VarStub <bool>  (&vert_fix_map));
 
-  command.AddVariable ("FixDOF",           new eTB_VarStub <bool>  (&fix_dof));
-  command.AddVariable ("KillDOF",          new eTB_VarStub <bool>  (&kill_dof));
+  command.AddVariable ("FixDOF",           new eTB_VarStub <bool>  (&postproc.fix_dof));
+  command.AddVariable ("KillDOF",          new eTB_VarStub <bool>  (&postproc.kill_dof));
 
-  command.AddVariable ("LogFrame",         new eTB_VarStub <bool>  (&log_frame));
-  command.AddVariable ("FramesToLog",      new eTB_VarStub <int>   (&log_frame_count));
+  command.AddVariable ("TraceFrame",       new eTB_VarStub <bool>  (&tracer.log_frame));
+  command.AddVariable ("FramesToTrace",    new eTB_VarStub <int>   (&tracer.frame_count));
 
   extern float mouse_y_scale;
-  command.AddVariable ("MouseYScale",     new eTB_VarStub <float> (&mouse_y_scale));
+  command.AddVariable ("MouseYScale",      new eTB_VarStub <float> (&mouse_y_scale));
+
+  command.AddVariable ("Trace.Shaders",    new eTB_VarStub <bool>  (&config.trace.shaders));
+  command.AddVariable ("Trace.UI",         new eTB_VarStub <bool>  (&config.trace.ui));
+  command.AddVariable ("Trace.HUD",        new eTB_VarStub <bool>  (&config.trace.hud));
+  command.AddVariable ("Trace.Menus",      new eTB_VarStub <bool>  (&config.trace.menus));
+  command.AddVariable ("Trace.Minimap",    new eTB_VarStub <bool>  (&config.trace.minimap));
+  command.AddVariable ("Trace.Nametags",   new eTB_VarStub <bool>  (&config.trace.nametags));
+
+  command.AddVariable ("Render.AllowBG",   new eTB_VarStub <bool>  (&config.render.allow_background));
+
+  command.AddVariable ("Render.CullVS",    new eTB_VarStub <int>   (&debug.cull_vs));
+  command.AddVariable ("Render.CullPS",    new eTB_VarStub <int>   (&debug.cull_ps));
 }
 
 bool

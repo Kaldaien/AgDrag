@@ -19,6 +19,8 @@
  *   If not, see <http://www.gnu.org/licenses/>.
  *
 **/
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <string>
 
 #include "hook.h"
@@ -28,6 +30,7 @@
 #include "render.h"
 
 #include <d3d9.h>
+#include <dinput.h>
 
 #include "config.h"
 
@@ -35,6 +38,54 @@
 #pragma comment (lib, "winmm.lib")
 
 #include <comdef.h>
+
+
+// State for window activation faking
+struct ad_window_state_s {
+  bool active          = true;
+  bool activating      = false;
+  RECT cursor_clip;
+} window;
+
+
+MH_STATUS
+WINAPI
+AD_CreateFuncHook ( LPCWSTR pwszFuncName,
+                    LPVOID  pTarget,
+                    LPVOID  pDetour,
+                    LPVOID *ppOriginal )
+{
+  static HMODULE hParent = GetModuleHandle (config.system.injector.c_str ());
+
+  typedef MH_STATUS (WINAPI *BMF_CreateFuncHook_t)
+      ( LPCWSTR pwszFuncName, LPVOID  pTarget,
+        LPVOID  pDetour,      LPVOID *ppOriginal );
+  static BMF_CreateFuncHook_t BMF_CreateFuncHook =
+    (BMF_CreateFuncHook_t)GetProcAddress (hParent, "BMF_CreateFuncHook");
+
+  return
+    BMF_CreateFuncHook (pwszFuncName, pTarget, pDetour, ppOriginal);
+}
+
+MH_STATUS
+WINAPI
+AD_CreateDLLHook ( LPCWSTR pwszModule, LPCSTR  pszProcName,
+                   LPVOID  pDetour,    LPVOID *ppOriginal,
+                   LPVOID *ppFuncAddr )
+{
+  static HMODULE hParent = GetModuleHandle (config.system.injector.c_str ());
+
+  typedef MH_STATUS (WINAPI *BMF_CreateDLLHook_t)(
+        LPCWSTR pwszModule, LPCSTR  pszProcName,
+        LPVOID  pDetour,    LPVOID *ppOriginal, 
+        LPVOID *ppFuncAddr );
+  static BMF_CreateDLLHook_t BMF_CreateDLLHook =
+    (BMF_CreateDLLHook_t)GetProcAddress (hParent, "BMF_CreateDLLHook");
+
+  return
+    BMF_CreateDLLHook (pwszModule,pszProcName,pDetour,ppOriginal,ppFuncAddr);
+}
+
 
 struct window_t {
   DWORD proc_id;
@@ -144,44 +195,6 @@ CalcCursorPos (LPPOINT pPoint)
 }
 
 
-WNDPROC original_wndproc = nullptr;
-
-LRESULT
-CALLBACK
-DetourWindowProc ( _In_  HWND   hWnd,
-                   _In_  UINT   uMsg,
-                   _In_  WPARAM wParam,
-                   _In_  LPARAM lParam )
-{
-  if (uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST) {
-    static POINT last_p = { LONG_MIN, LONG_MIN };
-
-    POINT p;
-
-    p.x = MAKEPOINTS (lParam).x;
-    p.y = MAKEPOINTS (lParam).y;
-
-    if (/*game_state.needsFixedMouseCoords () &&*/config.render.aspect_correction) {
-      // Only do this if cursor actually moved!
-      //
-      //   Otherwise, it tricks the game into thinking the input device changed
-      //     from gamepad to mouse (and changes button icons).
-      if (last_p.x != p.x || last_p.y != p.y) {
-        CalcCursorPos (&p);
-
-        last_p = p;
-      }
-
-      return CallWindowProc (original_wndproc, hWnd, uMsg, wParam, MAKELPARAM (p.x, p.y));
-    }
-
-    last_p = p;
-  }
-
-  return CallWindowProc (original_wndproc, hWnd, uMsg, wParam, lParam);
-}
-
-
 typedef BOOL (WINAPI *GetCursorInfo_t)
   (_Inout_ PCURSORINFO pci);
 
@@ -194,7 +207,7 @@ GetCursorInfo_Detour (PCURSORINFO pci)
   BOOL ret = GetCursorInfo_Original (pci);
 
   // Correct the cursor position for Aspect Ratio
-  if (config.render.aspect_correction) {
+  if (config.render.aspect_correction && config.render.aspect_ratio > (16.0f / 9.0f)) {
     POINT pt;
 
     pt.x = pci->ptScreenPos.x;
@@ -209,6 +222,17 @@ GetCursorInfo_Detour (PCURSORINFO pci)
   return ret;
 }
 
+
+LRESULT
+CALLBACK
+DetourWindowProc ( _In_  HWND   hWnd,
+                   _In_  UINT   uMsg,
+                   _In_  WPARAM wParam,
+                   _In_  LPARAM lParam );
+
+WNDPROC original_wndproc = nullptr;
+
+
 typedef BOOL (WINAPI *GetCursorPos_t)
   (_Out_ LPPOINT lpPoint);
 
@@ -221,23 +245,39 @@ GetCursorPos_Detour (LPPOINT lpPoint)
   BOOL ret = GetCursorPos_Original (lpPoint);
 
   // Correct the cursor position for Aspect Ratio
-  if (config.render.aspect_correction)
+  if (config.render.aspect_correction && config.render.aspect_ratio > (16.0f / 9.0f))
     CalcCursorPos (lpPoint);
-
-  // Defer initialization of the Window Message redirection stuff until
-  //   the first time the game calls GetCursorPos (...)
-  if (original_wndproc == nullptr && ad::RenderFix::hWndDevice != NULL) {
-    original_wndproc =
-      (WNDPROC)GetWindowLong (ad::RenderFix::hWndDevice, GWL_WNDPROC);
-
-    SetWindowLong ( ad::RenderFix::hWndDevice,
-                      GWL_WNDPROC,
-                        (LONG)DetourWindowProc );
-  }
 
   return ret;
 }
 
+typedef BOOL (WINAPI *IsIconic_pfn)(HWND hWnd);
+IsIconic_pfn IsIconic_Original = nullptr;
+
+BOOL
+WINAPI
+IsIconic_Detour (HWND hWnd)
+{
+  if (config.render.allow_background)
+    return FALSE;
+  else
+    return IsIconic_Original (hWnd);
+}
+
+
+typedef HWND (WINAPI *GetForegroundWindow_pfn)(void);
+GetForegroundWindow_pfn GetForegroundWindow_Original = nullptr;
+
+HWND
+WINAPI
+GetForegroundWindow_Detour (void)
+{
+  if (config.render.allow_background) {
+    return ad::RenderFix::hWndDevice;
+  }
+
+  return GetForegroundWindow_Original ();
+}
 
 class AD_InputHooker
 {
@@ -274,6 +314,8 @@ public:
 
     return pInputHook;
   }
+
+  bool isVisible (void) { return visible; }
 
   void Start (void)
   {
@@ -384,6 +426,29 @@ public:
 
       break;
     }
+
+    ad::RenderFix::hWndDevice = GetForegroundWindow ();
+
+    // Defer initialization of the Window Message redirection stuff until
+    //   the first time the game calls GetCursorPos (...)
+    if (original_wndproc == nullptr && ad::RenderFix::hWndDevice != NULL) {
+      original_wndproc =
+        (WNDPROC)GetWindowLong (ad::RenderFix::hWndDevice, GWL_WNDPROC);
+
+      SetWindowLong ( ad::RenderFix::hWndDevice,
+                        GWL_WNDPROC,
+                          (LONG)DetourWindowProc );
+    }
+
+    AD_CreateDLLHook ( L"user32.dll", "GetForegroundWindow",
+                        GetForegroundWindow_Detour,
+              (LPVOID*)&GetForegroundWindow_Original );
+
+#if 0
+    AD_CreateDLLHook ( L"user32.dll", "IsIconic",
+                        IsIconic_Detour,
+              (LPVOID*)&IsIconic_Original );
+#endif
 
     dll_log.Log ( L"  # Found window in %03.01f seconds, "
                      L"installing keyboard hook...",
@@ -582,8 +647,8 @@ public:
             extern bool vert_fix_map;
             vert_fix_map = ! vert_fix_map;
           } else if (keys_ [VK_MENU] && vkCode == 'L' && new_press) {
-            command.ProcessCommandLine ("FramesToLog 1");
-            command.ProcessCommandLine ("LogFrame true");
+            command.ProcessCommandLine ("FramesToTrace 1");
+            command.ProcessCommandLine ("TraceFrame true");
           } else if (keys_ [VK_MENU] && vkCode == 'D' && new_press) {
             command.ProcessCommandLine ("FixDOF toggle");
           } else if (keys_ [VK_MENU] && vkCode == VK_BACK && new_press) {
@@ -597,6 +662,8 @@ public:
               config.nametags.always_on_top = 0;
           } else if (keys_ [VK_MENU] && vkCode == 'M' && new_press) {
             config.nametags.aspect_correct = (! config.nametags.aspect_correct);
+          } else if (keys_ [VK_MENU] && vkCode == 'B' && new_press) {
+            command.ProcessCommandLine ("Render.AllowBG toggle");
           }
         }
 
@@ -638,43 +705,301 @@ public:
 };
 
 
-MH_STATUS
+typedef BOOL (WINAPI *ClipCursor_pfn)(
+  _In_opt_ const RECT *lpRect
+);
+
+ClipCursor_pfn ClipCursor_Original = nullptr;
+
+BOOL
 WINAPI
-AD_CreateFuncHook ( LPCWSTR pwszFuncName,
-                    LPVOID  pTarget,
-                    LPVOID  pDetour,
-                    LPVOID *ppOriginal )
+ClipCursor_Detour (const RECT *lpRect)
 {
-  static HMODULE hParent = GetModuleHandle (config.system.injector.c_str ());
+  if (lpRect != nullptr)
+    window.cursor_clip = *lpRect;
 
-  typedef MH_STATUS (WINAPI *BMF_CreateFuncHook_t)
-      ( LPCWSTR pwszFuncName, LPVOID  pTarget,
-        LPVOID  pDetour,      LPVOID *ppOriginal );
-  static BMF_CreateFuncHook_t BMF_CreateFuncHook =
-    (BMF_CreateFuncHook_t)GetProcAddress (hParent, "BMF_CreateFuncHook");
-
-  return
-    BMF_CreateFuncHook (pwszFuncName, pTarget, pDetour, ppOriginal);
+  if (window.active) {
+    return ClipCursor_Original (lpRect);
+  } else {
+    return ClipCursor_Original (nullptr);
+  }
 }
 
-MH_STATUS
-WINAPI
-AD_CreateDLLHook ( LPCWSTR pwszModule, LPCSTR  pszProcName,
-                   LPVOID  pDetour,    LPVOID *ppOriginal,
-                   LPVOID *ppFuncAddr )
+
+
+LRESULT
+CALLBACK
+DetourWindowProc ( _In_  HWND   hWnd,
+                   _In_  UINT   uMsg,
+                   _In_  WPARAM wParam,
+                   _In_  LPARAM lParam )
 {
-  static HMODULE hParent = GetModuleHandle (config.system.injector.c_str ());
+  // Block keyboard input to the game while the console is visible
+  if (uMsg == WM_INPUT && AD_InputHooker::getInstance ()->isVisible ())
+    return 0;
 
-  typedef MH_STATUS (WINAPI *BMF_CreateDLLHook_t)(
-        LPCWSTR pwszModule, LPCSTR  pszProcName,
-        LPVOID  pDetour,    LPVOID *ppOriginal, 
-        LPVOID *ppFuncAddr );
-  static BMF_CreateDLLHook_t BMF_CreateDLLHook =
-    (BMF_CreateDLLHook_t)GetProcAddress (hParent, "BMF_CreateDLLHook");
 
-  return
-    BMF_CreateDLLHook (pwszModule,pszProcName,pDetour,ppOriginal,ppFuncAddr);
+  // Allow the game to run in the background
+  if (uMsg == WM_ACTIVATEAPP) {
+    bool last_active = window.active;
+
+    window.active = wParam;
+
+    // Unrestrict the mouse when the app is deactivated
+    if ((! window.active) && config.render.allow_background) {
+      ClipCursor_Original (nullptr);
+    }
+
+    // Restore it when the app is activated
+    else {
+      ClipCursor_Original (&window.cursor_clip);
+    }
+
+    if (config.render.allow_background) {
+      CallWindowProc (original_wndproc, hWnd, uMsg, FALSE, ad::RenderFix::dwRenderThreadID);
+      CallWindowProc (original_wndproc, hWnd, uMsg, TRUE,  ad::RenderFix::dwRenderThreadID);
+      //window.activating = true;
+      return 0;
+    }
+  }
+
+
+  // Don't let the game do anything with the mouse or keyboard when
+  //   the game is not active
+  if (config.render.allow_background) {
+    if ((! window.active) && uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST)
+      return 0;
+
+    if ((! window.active) && uMsg >= WM_KEYFIRST && uMsg <= WM_KEYLAST)
+      return 0;
+  }
+
+
+  if (uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST) {
+    static POINT last_p = { LONG_MIN, LONG_MIN };
+
+    POINT p;
+
+    p.x = MAKEPOINTS (lParam).x;
+    p.y = MAKEPOINTS (lParam).y;
+
+    if (/*game_state.needsFixedMouseCoords () &&*/config.render.aspect_correction) {
+      // Only do this if cursor actually moved!
+      //
+      //   Otherwise, it tricks the game into thinking the input device changed
+      //     from gamepad to mouse (and changes buessagetton icons).
+      if (last_p.x != p.x || last_p.y != p.y) {
+        CalcCursorPos (&p);
+
+        last_p = p;
+      }
+
+      return CallWindowProc (original_wndproc, hWnd, uMsg, wParam, MAKELPARAM (p.x, p.y));
+    }
+
+    last_p = p;
+  }
+
+  return CallWindowProc (original_wndproc, hWnd, uMsg, wParam, lParam);
 }
+
+
+#pragma comment (lib, "dxguid.lib")
+
+#define DINPUT8_CALL(_Ret, _Call) {                                      \
+  dll_log.LogEx (true, L"  Calling original function: ");                \
+  (_Ret) = (_Call);                                                      \
+  _com_error err ((_Ret));                                               \
+  if ((_Ret) != S_OK)                                                    \
+    dll_log.LogEx (false, L"(ret=0x%04x - %s)\n\n", err.WCode (),        \
+                                                    err.ErrorMessage ());\
+  else                                                                   \
+    dll_log.LogEx (false, L"(ret=S_OK)\n\n");                            \
+}
+
+typedef HRESULT (WINAPI *IDirectInputDevice8_GetDeviceState_pfn)(IDirectInputDevice8* This,
+                                                                 DWORD                cbData,
+                                                                 LPVOID               lpvData);
+IDirectInputDevice8_GetDeviceState_pfn IDirectInputDevice8_GetDeviceState_Original = nullptr;
+
+HRESULT
+WINAPI
+IDirectInputDevice8_GetDeviceState_Detour ( IDirectInputDevice8       *This,
+                                            DWORD                      cbData,
+                                            LPVOID                     lpvData )
+{
+  static uint8_t mouse_state [128];
+
+  // For input faking
+  if ((! window.active) && config.render.allow_background) {
+    memcpy (lpvData, mouse_state, cbData);
+    return S_OK;
+  }
+
+  HRESULT hr;
+  hr = IDirectInputDevice8_GetDeviceState_Original ( This,
+                                                       cbData,
+                                                         lpvData );
+
+  if (SUCCEEDED (hr)) {
+    if (window.active) {
+      memcpy (mouse_state, lpvData, cbData);
+    }
+  }
+
+  return hr;
+}
+
+typedef HRESULT (WINAPI *IDirectInput8_CreateDevice_pfn)(
+  IDirectInput8       *This,
+  REFGUID              rguid,
+  LPDIRECTINPUTDEVICE *lplpDirectInputDevice,
+  LPUNKNOWN            pUnkOuter);
+IDirectInput8_CreateDevice_pfn IDirectInput8_CreateDevice_Original = nullptr;
+
+HRESULT
+WINAPI
+IDirectInput8_CreateDevice_Detour ( IDirectInput8       *This,
+                                    REFGUID              rguid,
+                                    LPDIRECTINPUTDEVICE *lplpDirectInputDevice,
+                                    LPUNKNOWN            pUnkOuter )
+{
+  const wchar_t* wszDevice = (rguid == GUID_SysKeyboard) ? L"Default System Keyboard" :
+                                (rguid == GUID_SysMouse) ? L"Default System Mouse" :
+                                                           L"Other Device";
+
+  dll_log.Log ( L" [!] IDirectInput8::CreateDevice (%08Xh, %s, %08Xh, %08Xh)",
+                  This,
+                    wszDevice,
+                      lplpDirectInputDevice,
+                        pUnkOuter );
+
+  HRESULT hr;
+  DINPUT8_CALL ( hr,
+                  IDirectInput8_CreateDevice_Original ( This,
+                                                         rguid,
+                                                          lplpDirectInputDevice,
+                                                           pUnkOuter ) );
+
+  if (SUCCEEDED (hr)) {
+    if (rguid == GUID_SysMouse) {
+      void** vftable = *(void***)*lplpDirectInputDevice;
+
+      AD_CreateFuncHook ( L"IDirectInputDevice8::GetDeviceState",
+                          vftable [9],
+                          IDirectInputDevice8_GetDeviceState_Detour,
+                (LPVOID*)&IDirectInputDevice8_GetDeviceState_Original );
+
+      AD_EnableHook (vftable [9]);
+    }
+  }
+
+  return hr;
+}
+
+
+typedef HRESULT (WINAPI *DirectInput8Create_pfn)( HINSTANCE hinst, DWORD dwVersion, REFIID riidltf, LPVOID *ppvOut, LPUNKNOWN punkOuter);
+DirectInput8Create_pfn DirectInput8Create_Original = nullptr;
+
+HRESULT
+WINAPI
+DirectInput8Create_Detour (HINSTANCE hinst, DWORD dwVersion, REFIID riidltf, LPVOID *ppvOut, LPUNKNOWN punkOuter)
+{
+  dll_log.Log ( L" [!] DirectInput8Create (0x%X, %lu, ..., %08Xh, %08Xh)",
+                  hinst, dwVersion, /*riidltf,*/ ppvOut, punkOuter );
+
+  HRESULT hr;
+  DINPUT8_CALL (hr,
+    DirectInput8Create_Original ( hinst,
+                                    dwVersion,
+                                      riidltf,
+                                        ppvOut,
+                                          punkOuter ));
+
+  // Avoid multiple hooks for third-party compatibility
+  static bool hooked = false;
+
+  if (SUCCEEDED (hr) && (! hooked)) {
+    void** vftable = *(void***)*ppvOut;
+
+    AD_CreateFuncHook ( L"IDirectInput8::CreateDevice",
+                        vftable [3],
+                        IDirectInput8_CreateDevice_Detour,
+              (LPVOID*)&IDirectInput8_CreateDevice_Original );
+
+    AD_EnableHook (vftable [3]);
+
+    hooked = true;
+  }
+
+  return hr;
+}
+
+
+typedef UINT (WINAPI *GetRawInputData_pfn)(
+  _In_      HRAWINPUT hRawInput,
+  _In_      UINT      uiCommand,
+  _Out_opt_ LPVOID    pData,
+  _Inout_   PUINT     pcbSize,
+  _In_      UINT      cbSizeHeader
+);
+
+GetRawInputData_pfn GetRawInputData_Original = nullptr;
+
+UINT
+WINAPI
+GetRawInputData_Detour (_In_      HRAWINPUT hRawInput,
+                        _In_      UINT      uiCommand,
+                        _Out_opt_ LPVOID    pData,
+                        _Inout_   PUINT     pcbSize,
+                        _In_      UINT      cbSizeHeader)
+{
+  // Block keyboard input to the game while the console is active
+  if (AD_InputHooker::getInstance ()->isVisible ())
+    return 0;
+
+  return GetRawInputData_Original (hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
+}
+
+
+typedef SHORT (WINAPI *GetAsyncKeyState_pfn)(
+  _In_ int vKey
+);
+
+GetAsyncKeyState_pfn GetAsyncKeyState_Original = nullptr;
+
+SHORT
+WINAPI
+GetAsyncKeyState_Detour (_In_ int vKey)
+{
+#define AD_ConsumeVKey(vKey) { GetAsyncKeyState_Original(vKey); return 0; }
+
+  // Window is not active, but we are faking it...
+  if ((! window.active) && config.render.allow_background)
+    AD_ConsumeVKey (vKey);
+
+  // Block keyboard input to the game while the console is active
+  if (AD_InputHooker::getInstance ()->isVisible ()) {
+    AD_ConsumeVKey (vKey);
+  }
+
+  // Block Left Alt
+  if (vKey == VK_LMENU)
+    if (config.keyboard.block_left_alt)
+      AD_ConsumeVKey (vKey);
+
+  // Block Left Ctrl
+  if (vKey == VK_LCONTROL)
+    if (config.keyboard.block_left_ctrl)
+      AD_ConsumeVKey (vKey);
+
+  return GetAsyncKeyState_Original (vKey);
+}
+
+
+
+
+
 
 MH_STATUS
 WINAPI
@@ -723,6 +1048,22 @@ AD_Init_MinHook (void)
 
   AD_InputHooker* pHook = AD_InputHooker::getInstance ();
   pHook->Start ();
+
+  AD_CreateDLLHook ( L"dinput8.dll", "DirectInput8Create",
+                     DirectInput8Create_Detour,
+           (LPVOID*)&DirectInput8Create_Original );
+
+  AD_CreateDLLHook ( L"user32.dll", "GetRawInputData",
+                        GetRawInputData_Detour,
+              (LPVOID*)&GetRawInputData_Original );
+
+  AD_CreateDLLHook ( L"user32.dll", "GetAsyncKeyState",
+                        GetAsyncKeyState_Detour,
+              (LPVOID*)&GetAsyncKeyState_Original );
+
+  AD_CreateDLLHook ( L"user32.dll", "ClipCursor",
+                        ClipCursor_Detour,
+              (LPVOID*)&ClipCursor_Original );
 
   return status;
 }
