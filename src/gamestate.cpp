@@ -38,9 +38,11 @@ ad_gamestate_s::init (void)
 
     minimap       = new ad_minimap_s ();
     minimap->type = ad_hud_render_task_s::TASK_MINIMAP;
+    minimap->init ();
 
     nametags       = new ad_nametags_s ();
     nametags->type = ad_hud_render_task_s::TASK_NAMETAGS;
+    nametags->init ();
 
     game->menu = nullptr;
 

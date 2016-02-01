@@ -75,6 +75,8 @@ struct {
   }
 } ui;
 
+float minimap_scale = 1.0f;
+
 bool AD_IsDrawingUI (void) {
   return ui.drawing;
 }
@@ -157,7 +159,7 @@ struct {
 } tracer;
 
 void
-AD_ComputeAspectCoeffs (float& x, float& y, float& xoff, float& yoff)
+AD_ComputeAspectCoeffs (float& x, float& y, float& xoff, float& yoff, bool force = false)
 {
   yoff = 0.0f;
   xoff = 0.0f;
@@ -165,7 +167,7 @@ AD_ComputeAspectCoeffs (float& x, float& y, float& xoff, float& yoff)
   x = 1.0f;
   y = 1.0f;
 
-  if (! (config.render.aspect_correction))
+  if (! (config.render.aspect_correction || force))
     return;
 
   config.render.aspect_ratio = (float)ad::RenderFix::width / (float)ad::RenderFix::height;
@@ -306,6 +308,11 @@ D3D9SetVertexShader_Detour (IDirect3DDevice9*       This,
   if (vs_checksum != vs_checksums [pShader])
     ui.center = false;
 
+  // Vertex Shader Changed
+  if (vs_checksum != vs_checksums [pShader]) {
+    minimap->notifyShaderChange (vs_checksums [pShader], ps_checksum, false);
+  }
+
   vs_checksum = vs_checksums [pShader];
 
 
@@ -370,29 +377,7 @@ D3D9SetPixelShader_Detour (IDirect3DDevice9*      This,
 
   // Pixel Shader Changed
   if (ps_checksum != ps_checksums [pShader]) {
-    if (minimap->drawing) {
-      ++minimap->shader_changes;
-      if (ui.drawing) {
-        if (minimap->shader_changes > 2) {
-          minimap->finished = true;
-          minimap->drawing  = false;
-        }
-      } else {
-        if (ps_checksum == 0xf88d8bcd){//0x9a78e585 && (minimap->prim_zpos < 0.0f || minimap->prim_zpos > 16.0f)) {
-          if (tracer.log_frame && config.trace.minimap) {
-            dll_log.Log ( L" Ending map menu draw <%f,%f,%f> (vs: %x, ps: %x)",
-                            minimap->prim_xpos,
-                              minimap->prim_ypos,
-                                minimap->prim_zpos,
-                                  vs_checksum,
-                                    ps_checksum );
-          }
-          ui.drawing        = true;
-          minimap->finished = true;
-          minimap->drawing  = false;
-        }
-      }
-    }
+    minimap->notifyShaderChange (vs_checksum, ps_checksums [pShader], true);
   }
 
   postproc.dof_active = false;
@@ -994,7 +979,7 @@ D3D9DrawPrimitive_Detour ( IDirect3DDevice9* This,
     float x_off, y_off;
     AD_ComputeAspectCoeffs (x, y, x_off, y_off);
 
-    if (config.render.center_ui && (ui.drawing || minimap->prim_zpos == 0.0f) /* Stupid hack */) {
+    if (config.render.center_ui && ((! minimap->main_map) || minimap->finished || (! minimap->drawing))) {
       vp.Width /= x;
       vp.X     += x_off;
     }
@@ -1008,13 +993,13 @@ D3D9DrawPrimitive_Detour ( IDirect3DDevice9* This,
                                                                         ps_checksum );
     }
 
-    if ((minimap->ps23 == 1.0f && minimap->ps43 == 1.0f && vert_fix_map) || minimap->center_prim || (! ui.drawing) /* Stupid hack */) {
+    if ((minimap->ps23 == 1.0f && minimap->ps43 == 1.0f && vert_fix_map) || minimap->center_prim || (minimap->main_map && minimap->drawing && (! minimap->finished))) {
       //if (! vert_fix_map)
         //vp.Height -= ((float)viewport.Height - vp.Height / x) / 2.0f;
     }
 
     else {
-      vp.Y  += ((float)viewport.Height - vp.Height / x) / 2.0f;
+      vp.Y += ((float)viewport.Height - vp.Height / x) / 2.0f;
     }
 
     D3D9SetViewport_Original (This, &vp);
@@ -1137,16 +1122,15 @@ D3D9DrawIndexedPrimitive_Detour (IDirect3DDevice9* This,
     float x_off, y_off;
     AD_ComputeAspectCoeffs (x, y, x_off, y_off);
 
-    if (! ui.drawing) { // Main map
-      //vp.Y      += ((float)viewport.Height - vp.Height / x);
+    if (minimap->main_map && minimap->drawing && (! minimap->finished)) { // Main map
       vp.Height *= x;
     } else {
-      if (config.render.center_ui ) {
+      if (config.render.center_ui) {
         vp.Width /= x;
         vp.X     += x_off;
       }
 
-      vp.Y  += ((float)viewport.Height - vp.Height / x) / 2.0f;
+      vp.Y += ((float)viewport.Height - vp.Height / x) / 2.0f;
     }
 
     D3D9SetViewport_Original (This, &vp);
@@ -1207,7 +1191,6 @@ typedef HRESULT (STDMETHODCALLTYPE *SetVertexShaderConstantF_t)(
 
 SetVertexShaderConstantF_t D3D9SetVertexShaderConstantF_Original = nullptr;
 
-float scale_coeff      = 0.5f;
 float name_shift_coeff = 1.01f;
 
 COM_DECLSPEC_NOTHROW
@@ -1349,16 +1332,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
       minimap->prim_zpos = pConstantData [14];
     }
 
-  if (ui.drawing && config.render.aspect_correction && viewport.Width / viewport.Height == ad::RenderFix::width / ad::RenderFix::height && (StartRegister == 1/* || StartRegister == 9*/)) {
-    if (minimap->drawing) {
-      // Turn off aspect ratio correction if the "minimap" is drawn with these shaders,
-      //   because it's not the minimap, but rather the menu map.
-      if (vs_checksum == 0x9a78e585 && ps_checksum == 0xcca36c71) {
-        ui.drawing = false;
-        break;
-      }
-    }
-
+  if (ui.drawing && (! minimap->main_map) && config.render.aspect_correction && viewport.Width / viewport.Height == ad::RenderFix::width / ad::RenderFix::height && (StartRegister == 1/* || StartRegister == 9*/)) {
     //last_vs = 0x5c8f22bc && last_ps == 0xbf9778a
 
     //
@@ -1545,14 +1519,14 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
           scale_trans [i+j] = scale [i] * trans [j] + scale [i+1] * trans [j+4] + scale [i+2] * trans [j+8] + scale [i+3] * trans [j+12];
 
       if (ui.center)
-        pNotConstantData [12] = ((x_ndc * (float)viewport.Width + (float)viewport.Width) / 2.0f) + x_off * scale_coeff;
+        pNotConstantData [12] = ((x_ndc * (float)viewport.Width + (float)viewport.Width) / 2.0f) + config.scaling.hud_x_offset;
 
       pNotConstantData [13] = scale_trans [13];
 
       if (true) {
         float scale2 [16] = { 1.0f/ar_scale, 0.0f,         0.0f, 0.0f,
                               0.0f,         1.0f/ar_scale, 0.0f, 0.0f,
-                              0.0f,         0.0f,          1.0f, 0.0f,
+                              0.0f,         0.0f,          1.0f/ar_scale, 0.0f,
                               0.0f,         0.0f,          0.0f, 1.0f };
         float orig [16] = { pConstantData [ 0], pConstantData [ 1], pConstantData [ 2], pConstantData [ 3],
                             pConstantData [ 4], pConstantData [ 5], pConstantData [ 6], pConstantData [ 7],
@@ -1581,14 +1555,12 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
         pNotConstantData [4] = scaled [4];
         pNotConstantData [5] = scaled [5];
 
-#if 0
-        if (! ((! drawing_menu) && nametags->drawing)) {
-          pNotConstantData [0] *= ar_scale;
-          pNotConstantData [1] *= ar_scale;
-          pNotConstantData [4] *= ar_scale;
-          pNotConstantData [5] *= ar_scale;
+        if (ui.drawing && (! minimap->main_map) && minimap->drawing) {
+          pNotConstantData [0] *= ar_scale * minimap_scale;
+          pNotConstantData [1] *= ar_scale * minimap_scale;
+          pNotConstantData [4] *= ar_scale * minimap_scale;
+          pNotConstantData [5] *= ar_scale * minimap_scale;
         }
-#endif
       }
 
       if (minimap->drawing) {
@@ -1782,46 +1754,104 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
                           pparams->FullScreen_RefreshRateInHz,
                             pparams->hDeviceWindow );
 
-    ad::RenderFix::hWndDevice = pparams->hDeviceWindow;
+    if (pparams->hDeviceWindow != nullptr)
+      ad::RenderFix::hWndDevice = pparams->hDeviceWindow;
+    else if (ad::RenderFix::hWndDevice == nullptr)
+      ad::RenderFix::hWndDevice = GetForegroundWindow (); // Tsk, tsk
 
     ad::RenderFix::width  = present_params.BackBufferWidth;
     ad::RenderFix::height = present_params.BackBufferHeight;
-    //ad::FrameRateFix::fullscreen = (! pparams->Windowed);
+
+    //
+    // Implicitly force a borderless window
+    //
+    if (config.render.allow_background) {
+      bool fullscreen        = (! pparams->Windowed);
+      pparams->Windowed      = true;
+      //pparams->hDeviceWindow = ad::RenderFix::hWndDevice;
+
+      LONG dwStyle   = GetWindowLong (ad::RenderFix::hWndDevice, GWL_STYLE);
+      LONG dwStyleEx = GetWindowLong (ad::RenderFix::hWndDevice, GWL_EXSTYLE);
+
+      dwStyle   &= ~(WS_BORDER | WS_CAPTION | WS_THICKFRAME | WS_OVERLAPPEDWINDOW | WS_MINIMIZE | WS_MAXIMIZE | WS_SYSMENU | WS_GROUP);
+      dwStyleEx &= ~(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE | WS_EX_OVERLAPPEDWINDOW | WS_EX_PALETTEWINDOW | WS_EX_MDICHILD);
+
+      SetWindowLong (ad::RenderFix::hWndDevice, GWL_STYLE,   dwStyle);
+      SetWindowLong (ad::RenderFix::hWndDevice, GWL_EXSTYLE, dwStyleEx);
+
+      SetWindowPos  ( ad::RenderFix::hWndDevice,
+                        NULL,
+                          0,0,ad::RenderFix::width,ad::RenderFix::height,
+                            SWP_FRAMECHANGED |
+                            SWP_NOZORDER     | SWP_NOOWNERZORDER );
+
+      if (fullscreen) {
+        DEVMODE devmode = { 0 };
+        devmode.dmSize = sizeof DEVMODE;
+
+        EnumDisplaySettings (nullptr, ENUM_CURRENT_SETTINGS, &devmode);
+
+        if ( devmode.dmPelsHeight       != ad::RenderFix::height ||
+             devmode.dmPelsWidth        != ad::RenderFix::width  ||
+             devmode.dmDisplayFrequency != pparams->FullScreen_RefreshRateInHz ) {
+            devmode.dmPelsWidth        = ad::RenderFix::width;
+            devmode.dmPelsHeight       = ad::RenderFix::height;
+            devmode.dmDisplayFrequency = pparams->FullScreen_RefreshRateInHz;
+
+            ChangeDisplaySettings (&devmode, CDS_FULLSCREEN);
+        }
+
+        pparams->FullScreen_RefreshRateInHz = 0;
+      }
+    }
 
     ui.widescreen = true;
 
     //
-    // Optimized centers to avoid post-processing nois
+    // Optimized centers to avoid post-processing noise
     //
 
+    config.scaling.hud_x_offset = 164.12f;
+
+    float x,    y;
+    float xoff, yoff;
+
+    AD_ComputeAspectCoeffs (x, y, xoff, yoff, true);
+
+    config.scaling.hud_x_offset = xoff / y;
+
+#if 0
     float ar = (float)pparams->BackBufferWidth / (float)pparams->BackBufferHeight;
 
+    if (config.scaling.hud_x_offset == 0.0f) {
     if (ar == 2560.0f / 1080.0f) {
-      scale_coeff = 0.497f;
+      config.scaling.hud_x_offset = 164.12f;
+      //scale_coeff = 0.497f;
     }
 
     // 21:9
     else if (ar >= (21.0f / 9.0f) - 0.25f && ar <= (21.0f / 9.0f) + 0.25f) {
       dll_log.Log (L" >> Aspect Ratio: 21:9");
 
-      scale_coeff      = 0.373f;
+      config.scaling.hud_x_offset = 164.12f;
+      //scale_coeff      = 0.373f;
       name_shift_coeff = 1.016f;
 
       if (pparams->BackBufferWidth == 1120 && pparams->BackBufferHeight == 480) {
-        scale_coeff = 1.151f;
+        //scale_coeff = 1.151f;
       }
     }
 
     // 16:5
     else if (ar == 16.0f / 5.0f) {
       dll_log.Log (L" >> Aspect Ratio: 16:5");
-      scale_coeff = 0.4425f;
+      //scale_coeff = 0.4425f;
     }
 
     // 16:3
     else if (ar == 16.0f / 3.0f) {
       dll_log.Log (L" >> Aspect Ratio: 16:3");
-      scale_coeff      = 0.222f;
+      //scale_coeff      = 0.222f;
       name_shift_coeff = 1.046f;
     }
 
@@ -1831,8 +1861,10 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
     } else {
       dll_log.Log (L" >> Aspect Ratio:  16:9 or narrower");
       ui.widescreen = false;
-      scale_coeff   = 0.0f;
+      //scale_coeff   = 0.0f;
     }
+    }
+#endif
   }
 
   return BMF_SetPresentParamsD3D9_Original (device, pparams);
@@ -1929,7 +1961,6 @@ ad::RenderFix::CommandProcessor::CommandProcessor (void)
 
   command.AddVariable ("AspectCorrection", aspect_correction);
   command.AddVariable ("CenterUI",         center_ui_);
-  command.AddVariable ("ScaleCoeff",       new eTB_VarStub <float> (&scale_coeff));
   command.AddVariable ("NameShiftCoeff",   new eTB_VarStub <float> (&name_shift_coeff));
   command.AddVariable ("AllowScissor",     new eTB_VarStub <bool>  (&debug.allow_scissor));
   command.AddVariable ("FixMinimap",       new eTB_VarStub <bool>  (&config.render.fix_minimap));
@@ -1940,9 +1971,6 @@ ad::RenderFix::CommandProcessor::CommandProcessor (void)
 
   command.AddVariable ("TraceFrame",       new eTB_VarStub <bool>  (&tracer.log_frame));
   command.AddVariable ("FramesToTrace",    new eTB_VarStub <int>   (&tracer.frame_count));
-
-  extern float mouse_y_scale;
-  command.AddVariable ("MouseYScale",      new eTB_VarStub <float> (&mouse_y_scale));
 
   command.AddVariable ("Trace.Shaders",    new eTB_VarStub <bool>  (&config.trace.shaders));
   command.AddVariable ("Trace.UI",         new eTB_VarStub <bool>  (&config.trace.ui));
@@ -1955,6 +1983,11 @@ ad::RenderFix::CommandProcessor::CommandProcessor (void)
 
   command.AddVariable ("Render.CullVS",    new eTB_VarStub <int>   (&debug.cull_vs));
   command.AddVariable ("Render.CullPS",    new eTB_VarStub <int>   (&debug.cull_ps));
+
+  command.AddVariable ("Render.MapScale",  new eTB_VarStub <float> (&minimap_scale));
+
+  command.AddVariable ("Mouse.YOff",       new eTB_VarStub <float> (&config.scaling.mouse_y_offset));
+  command.AddVariable ("HUD.XOff",         new eTB_VarStub <float> (&config.scaling.hud_x_offset));
 }
 
 bool

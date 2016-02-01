@@ -22,12 +22,15 @@
 #ifndef __AD__HUD_MINIMAP_H__
 #define __AD__HUD_MINIMAP_H__
 
+#include <cstdint>
 #include "../hud.h"
 
 // The minimap is 3 shaders, basically... so once triggered
 //   we will continue to modify the viewport coordinates until
 //     2 shader changes elapse.
 struct ad_minimap_s : ad_hud_render_task_s {
+  bool  main_map       = false;
+
   int   shader_changes = 0;
   int   prims_drawn    = 0;
   float prim_xpos      = 0.0f;
@@ -39,7 +42,10 @@ struct ad_minimap_s : ad_hud_render_task_s {
 
   bool  center_prim    = false; // The triangle in the middle
 
+  void init  (void);
   void reset (void);
+
+  void notifyShaderChange (uint32_t vs_crc32, uint32_t ps_crc32, bool pixel);
 } extern *minimap;
 
 #endif /* __AD__HUD_MINIMAP_H__ */

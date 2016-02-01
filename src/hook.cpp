@@ -126,9 +126,6 @@ AD_FindRootWindow (DWORD proc_id)
   return win.root;
 }
 
-float mouse_y_scale;
-
-
 void
 AD_ComputeAspectCoeffsEx (float& x, float& y, float& xoff, float& yoff)
 {
@@ -151,12 +148,26 @@ AD_ComputeAspectCoeffsEx (float& x, float& y, float& xoff, float& yoff)
 
     x    = (float)ad::RenderFix::width / (float)width;
     xoff = x_off;
+
+    dll_log.Log (L"x (%f) : xoff (%f)", x, xoff);
+
+#if 0
+    // Calculated height will be greater than we started with, so work
+    //  in the wrong direction here...
+    int height = (9.0f / 16.0f) * ad::RenderFix::width;
+    y          = (float)ad::RenderFix::height / (float)height;
+#endif
+
+    yoff = config.scaling.mouse_y_offset;
   } else {
+// No fix is needed in this direction
+#if 0
     int height = (9.0f / 16.0f) * ad::RenderFix::width;
     int y_off  = (ad::RenderFix::height - height) / 2;
 
     y    = (float)ad::RenderFix::height / (float)height;
     yoff = y_off;
+#endif
   }
 }
 
@@ -169,27 +180,13 @@ CalcCursorPos (LPPOINT pPoint)
 
   AD_ComputeAspectCoeffsEx (xscale, yscale, xoff, yoff);
 
-  //
-  // TODO: Factor this straight into xoff during AD_ComputeAspectCoeffs
-  //
-  yscale = xscale;
-
   if (! config.render.center_ui) {
     xscale = 1.0f;
     xoff   = 0.0f;
   }
 
   pPoint->x = ((float)pPoint->x - xoff) * xscale;
-  pPoint->y = ((float)pPoint->y - yoff) * yscale;
-
-  ///int width = ad::RenderFix::width;
-  ///int height = (9.0f / 16.0f) * width;
-
-  ////float scale = (float)height / ad::RenderFix::height;
-
-  ////float y_ndc = 2.0f * ((float)pPoint->y / (float)ad::RenderFix::height) - 1.0f;
-
-  /////pPoint->y = ((float)pPoint->y - (ad::RenderFix::height / xscale)) * (xscale);// ((y_ndc * ad::RenderFix::height * scale + ad::RenderFix::height * scale) / 3.0f);
+  pPoint->y = ((float)pPoint->y - yoff) * xscale;
 
   return *pPoint;
 }
@@ -505,6 +502,23 @@ public:
                     hits > 1 ? L"tries" : L"try",
                       timeGetTime () - dwTime );
 
+      if (config.render.allow_background) {
+        LONG dwStyle   = GetWindowLong (ad::RenderFix::hWndDevice, GWL_STYLE);
+        LONG dwStyleEx = GetWindowLong (ad::RenderFix::hWndDevice, GWL_EXSTYLE);
+
+        dwStyle   &= ~(WS_BORDER | WS_CAPTION | WS_THICKFRAME | WS_OVERLAPPEDWINDOW | WS_MINIMIZE | WS_MAXIMIZE | WS_SYSMENU | WS_GROUP);
+        dwStyleEx &= ~(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE | WS_EX_OVERLAPPEDWINDOW | WS_EX_PALETTEWINDOW | WS_EX_MDICHILD);
+
+        SetWindowLong (ad::RenderFix::hWndDevice, GWL_STYLE,   dwStyle);
+        SetWindowLong (ad::RenderFix::hWndDevice, GWL_EXSTYLE, dwStyleEx);
+
+        SetWindowPos  ( ad::RenderFix::hWndDevice,
+                          NULL,
+                            0,0,ad::RenderFix::width,ad::RenderFix::height,
+                              SWP_FRAMECHANGED |
+                              SWP_NOZORDER     | SWP_NOOWNERZORDER );
+    }
+
     while (true) {
       Sleep (10);
     }
@@ -632,11 +646,11 @@ public:
           } else if (keys_ [VK_MENU] && vkCode == 'Z' && new_press) {
             command.ProcessCommandLine ("CenterUI toggle");
           } else if (vkCode == VK_OEM_COMMA) {
-            extern float scale_coeff;
-            scale_coeff -= 0.001f;
+            if (! config.scaling.locked)
+              config.scaling.hud_x_offset -= 0.01f;
           } else if (vkCode == VK_OEM_PERIOD) {
-            extern float scale_coeff;
-            scale_coeff += 0.001f;
+            if (! config.scaling.locked)
+              config.scaling.hud_x_offset += 0.01f;
           } else if (vkCode == VK_OEM_6) {
             extern float name_shift_coeff;
             name_shift_coeff += 0.001f;
@@ -747,6 +761,21 @@ DetourWindowProc ( _In_  HWND   hWnd,
 
     // Unrestrict the mouse when the app is deactivated
     if ((! window.active) && config.render.allow_background) {
+      LONG dwStyle   = GetWindowLong (ad::RenderFix::hWndDevice, GWL_STYLE);
+      LONG dwStyleEx = GetWindowLong (ad::RenderFix::hWndDevice, GWL_EXSTYLE);
+
+      dwStyle   &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZE | WS_MAXIMIZE | WS_SYSMENU);
+      dwStyleEx &= ~(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE);
+
+      SetWindowLong (ad::RenderFix::hWndDevice, GWL_STYLE,   dwStyle);
+      SetWindowLong (ad::RenderFix::hWndDevice, GWL_EXSTYLE, dwStyleEx);
+
+      SetWindowPos  ( ad::RenderFix::hWndDevice,
+                        NULL,
+                          0,0,ad::RenderFix::width,ad::RenderFix::height,
+                            SWP_FRAMECHANGED |
+                            SWP_NOZORDER     | SWP_NOOWNERZORDER );
+
       ClipCursor_Original (nullptr);
     }
 

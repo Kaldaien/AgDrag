@@ -67,36 +67,33 @@ DWORD dwLastBlend    = 0;
 #include "../log.h"
 #include "../hook.h"
 
-#if 0
-typedef void (__cdecl *foo_pfn)(void);
-foo_pfn original_nametag = nullptr;
+typedef void (__stdcall *uGUIMap_draw_pfn)(void);
+uGUIMap_draw_pfn uGUIMap_draw_Original = nullptr;
 
 void
-__fastcall
-nametag_draw (void)
+__stdcall
+uGUIMap_draw_Detour (void)
 {
-  extern bool AD_IsDrawingUI (void);
+  //dll_log.Log (L"uGUIMap::draw (...)");
 
-  if (AD_IsDrawingUI ())
-    nametags->drawing = true;
-
-  original_nametag ();
+  //uGUIMap_draw_Original ();
 }
-#endif
+
+void
+ad_nametags_s::init (void)
+{
+  static bool hooked = false;
+
+  if (! hooked) {
+    //AD_CreateFuncHook (L"Nametags", (LPVOID)0x00FEA960, uGUIMap_draw_Detour, (LPVOID *)&uGUIMap_draw_Original );
+    //hooked = true;
+    //AD_EnableHook ((LPVOID)0x00FEA960);
+  }
+}
 
 void
 ad_nametags_s::beginPrimitive (IDirect3DDevice9* pDev)
 {
-#if 0
-  static bool hooked = false;
-
-  if (! hooked) {
-    AD_CreateFuncHook (L"Nametags", (LPVOID)0x00da925c, nametag_draw, (LPVOID *)&original_nametag );
-    hooked = true;
-    AD_EnableHook ((LPVOID)0x00da925c);
-  }
-#endif
-
   pDev->GetRenderState (D3DRS_ZENABLE, &dwLastZEnable);
   pDev->GetRenderState (D3DRS_ZFUNC,   &dwLastZFunc);
 

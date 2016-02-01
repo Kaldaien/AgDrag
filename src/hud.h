@@ -32,6 +32,7 @@ struct ad_hud_render_task_s {
     TASK_CONTROL_HINTS = 0x4  // Button Icons
   } type;
 
+  virtual void init  (void) = 0;
   virtual void reset (void) = 0;
 };
 

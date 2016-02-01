@@ -38,6 +38,12 @@ struct ad_config_s
   } render;
 
   struct {
+    float    mouse_y_offset    = 0.0f;
+    float    hud_x_offset      = 0.0f;
+    bool     locked            = true;
+  } scaling;
+
+  struct {
     bool     aspect_correct    = false;
     int      always_on_top     = 2;
     bool     temp_on_top       = false; // When the key combo is held

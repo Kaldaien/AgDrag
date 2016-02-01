@@ -64,6 +64,7 @@ struct ad_nametags_s : ad_hud_render_task_s {
 
   test_result trigger (float last_z, float y, float z, float w, float zz);
 
+  void init  (void);
   void reset (void);
 } extern *nametags;
 
