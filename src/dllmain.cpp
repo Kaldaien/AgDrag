@@ -30,23 +30,49 @@
 
 #include "command.h"
 #include "hook.h"
+#include "input.h"
 
 #pragma comment (lib, "kernel32.lib")
+
+HMODULE hDLLMod      = { 0 }; // Handle to SELF
+HMODULE hInjectorDLL = { 0 }; // Handle to Special K
+
+typedef void (__stdcall *SK_SetPluginName_pfn)(std::wstring name);
+SK_SetPluginName_pfn SK_SetPluginName = nullptr;
 
 DWORD
 WINAPI
 DllThread (LPVOID user)
 {
+  std::wstring plugin_name = L"Agnostic Dragon v " + AD_VER_STR;
+
+  hInjectorDLL =
+    GetModuleHandle (config.system.injector.c_str ());
+
+  SK_SetPluginName = 
+    (SK_SetPluginName_pfn)GetProcAddress (hInjectorDLL, "SK_SetPluginName");
+  SK_GetCommandProcessor =
+    (SK_GetCommandProcessor_pfn)GetProcAddress (hInjectorDLL, "SK_GetCommandProcessor");
+
+  //
+  // If this is NULL, the injector system isn't working right!!!
+  //
+  if (SK_SetPluginName != nullptr)
+    SK_SetPluginName (plugin_name);
+
+
+  // Game State
   ad_gamestate_s::init ();
 
+
+  // Plugin State
   if (AD_Init_MinHook () == MH_OK) {
-    ad::RenderFix::Init ();
+    ad::InputManager::Init ();
+    ad::RenderFix::Init    ();
   }
 
   return 0;
 }
-
-HMODULE hDLLMod = { 0 };
 
 BOOL
 APIENTRY
@@ -88,6 +114,7 @@ DllMain (HMODULE hModule,
 
   case DLL_PROCESS_DETACH:
     ad::RenderFix::Shutdown    ();
+    ad::InputManager::Shutdown ();
 
     AD_UnInit_MinHook ();
     AD_SaveConfig     ();

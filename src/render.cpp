@@ -1479,7 +1479,7 @@ D3D9SetVertexShaderConstantF_Detour (IDirect3DDevice9* This,
       if (tracer.log_frame && config.trace.ui && vs_checksum == 0x5c8f22bc && ps_checksum == 0xbf9778a) {
         dll_log.Log (L"UI Element @ (%2.1f,%2.1f :: %2.1f <%2.1f>) [%lux%lu]", x_pos, y_pos, pConstantData [14], pConstantData [10], viewport.Width, viewport.Height);
         dll_log.Log (L"           # (%2.1f,%2.1f || %2.1f, %2.1f)",                          pConstantData [0], pConstantData [5], pConstantData [4], pConstantData [1]);
-        dll_log.Log (L"           % (%2.1f,%2.1f <> %2.1f, %2.1f {%2.1f}",                   pConstantData [2], pConstantData [3], pConstantData [6], pConstantData [7], pConstantData [15]);
+        dll_log.Log (L"           %% (%2.1f,%2.1f <> %2.1f, %2.1f {%2.1f}",                  pConstantData [2], pConstantData [3], pConstantData [6], pConstantData [7], pConstantData [15]);
         dll_log.Log (L" --> (%2.1f,%2.1f) {%2.1f,%2.1f}", x_ndc, y_ndc, x_off, y_off);
         dll_log.Log (L" UI Scale: (%2.1f,%2.1f)", x_scale, y_scale);
 
@@ -1754,9 +1754,15 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
                           pparams->FullScreen_RefreshRateInHz,
                             pparams->hDeviceWindow );
 
+// The game doesn't ever use this, so we resort to a different technique.
+//
+//  @@@ The code is preserved here because it works well in other D3D9
+//        compliant games.
+#if 0
     if (pparams->hDeviceWindow != nullptr)
       ad::RenderFix::hWndDevice = pparams->hDeviceWindow;
-    else if (ad::RenderFix::hWndDevice == nullptr)
+#endif
+    if (ad::RenderFix::hWndDevice == nullptr)
       ad::RenderFix::hWndDevice = GetForegroundWindow (); // Tsk, tsk
 
     ad::RenderFix::width  = present_params.BackBufferWidth;
@@ -1768,24 +1774,14 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
     if (config.render.allow_background) {
       bool fullscreen        = (! pparams->Windowed);
       pparams->Windowed      = true;
-      //pparams->hDeviceWindow = ad::RenderFix::hWndDevice;
 
-      LONG dwStyle   = GetWindowLong (ad::RenderFix::hWndDevice, GWL_STYLE);
-      LONG dwStyleEx = GetWindowLong (ad::RenderFix::hWndDevice, GWL_EXSTYLE);
-
-      dwStyle   &= ~(WS_BORDER | WS_CAPTION | WS_THICKFRAME | WS_OVERLAPPEDWINDOW | WS_MINIMIZE | WS_MAXIMIZE | WS_SYSMENU | WS_GROUP);
-      dwStyleEx &= ~(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE | WS_EX_OVERLAPPEDWINDOW | WS_EX_PALETTEWINDOW | WS_EX_MDICHILD);
-
-      SetWindowLong (ad::RenderFix::hWndDevice, GWL_STYLE,   dwStyle);
-      SetWindowLong (ad::RenderFix::hWndDevice, GWL_EXSTYLE, dwStyleEx);
-
-      SetWindowPos  ( ad::RenderFix::hWndDevice,
+      if (fullscreen) {
+        SetWindowPos  ( ad::RenderFix::hWndDevice,
                         NULL,
                           0,0,ad::RenderFix::width,ad::RenderFix::height,
                             SWP_FRAMECHANGED |
                             SWP_NOZORDER     | SWP_NOOWNERZORDER );
 
-      if (fullscreen) {
         DEVMODE devmode = { 0 };
         devmode.dmSize = sizeof DEVMODE;
 
@@ -1811,14 +1807,67 @@ BMF_SetPresentParamsD3D9_Detour (IDirect3DDevice9*      device,
     // Optimized centers to avoid post-processing noise
     //
 
-    config.scaling.hud_x_offset = 164.12f;
-
     float x,    y;
     float xoff, yoff;
 
-    AD_ComputeAspectCoeffs (x, y, xoff, yoff, true);
+    extern void AD_ComputeAspectCoeffsEx (float& x, float& y, float& xoff, float& yoff, bool force);
+    AD_ComputeAspectCoeffsEx (x, y, xoff, yoff, true);
 
-    config.scaling.hud_x_offset = xoff / y;
+    dll_log.Log ( L" [Scaling] (  X  : %11.6f,   Y  : %11.6f )",
+                    x, y );
+    dll_log.Log ( L" [Offsets] ( x/2 : %11.6f,  y/2 : %11.6f )",
+                    xoff, yoff );
+
+    //config.scaling.hud_x_offset = 164.12f; // 3440x1440
+    //config.scaling.hud_x_offset = 285.0f;  // 2880x900
+
+    if (config.scaling.auto_calc) {
+      float ar = (float)pparams->BackBufferWidth / (float)pparams->BackBufferHeight;
+      float xoff_auto;
+
+      config.scaling.mouse_y_offset = xoff / (ar);
+
+      std::wstring aspect;
+
+      // 21:9
+      if (ar >= (21.0f / 9.0f) - 0.15f && ar <= (21.0f / 9.0f) + 0.15f) {
+        aspect    = L"21:9";
+        xoff_auto = 0.373f * xoff;
+      }
+
+      else if (ar >= (16.0 / 5.0f) - 0.15f && ar <= (16.0 / 5.0f) + 0.15f) {
+        aspect    = L"16:5";
+        xoff_auto = (ad::RenderFix::width / 2.0f - (2.0 * xoff)) * x;
+      }
+
+      else if (ar >= (16.0f / 3.0f) - 0.15f && ar <= (16.0f / 3.0f) + 0.15f) {
+        aspect     = L"16:3";
+        xoff_auto = 0.222f * xoff;
+      }
+
+      else if (ar > (16.0f / 9.0f)) {
+        aspect     = L"Non-Standard Widescreen";
+        xoff_auto  = 0.333f * xoff;
+      }
+
+      else {
+        aspect        = L"16:9 or Narrower";
+        xoff_auto     = 0.0f;
+        ui.widescreen = false;
+
+        config.scaling.mouse_y_offset = 0.0f;
+      }
+
+      xoff_auto = (xoff / x) / 2.0f;
+
+      dll_log.Log ( L" <AutoCal> ( Mouse.YOffset=%11.6f", config.scaling.mouse_y_offset );
+      dll_log.Log ( L"               HUD.XOffset=%11.6f ) { %s }", xoff_auto, aspect.c_str () );
+    } else {
+      dll_log.Log ( L" <UserSet> ( Mouse.YOffset=%11.6f",
+                      config.scaling.mouse_y_offset );
+      dll_log.Log ( L"               HUD.XOffset=%11.6f )",
+                      config.scaling.hud_x_offset   );
+    }
 
 #if 0
     float ar = (float)pparams->BackBufferWidth / (float)pparams->BackBufferHeight;
@@ -1959,35 +2008,40 @@ ad::RenderFix::CommandProcessor::CommandProcessor (void)
 
   eTB_Variable* aspect_correction   = new eTB_VarStub <bool>  (&config.render.aspect_correction);
 
-  command.AddVariable ("AspectCorrection", aspect_correction);
-  command.AddVariable ("CenterUI",         center_ui_);
-  command.AddVariable ("NameShiftCoeff",   new eTB_VarStub <float> (&name_shift_coeff));
-  command.AddVariable ("AllowScissor",     new eTB_VarStub <bool>  (&debug.allow_scissor));
-  command.AddVariable ("FixMinimap",       new eTB_VarStub <bool>  (&config.render.fix_minimap));
-  command.AddVariable ("VertFixMap",       new eTB_VarStub <bool>  (&vert_fix_map));
+  eTB_CommandProcessor* pCommandProc = SK_GetCommandProcessor ();
 
-  command.AddVariable ("FixDOF",           new eTB_VarStub <bool>  (&postproc.fix_dof));
-  command.AddVariable ("KillDOF",          new eTB_VarStub <bool>  (&postproc.kill_dof));
+  pCommandProc->AddVariable ("AspectCorrection", aspect_correction);
+  pCommandProc->AddVariable ("CenterUI",         center_ui_);
+  pCommandProc->AddVariable ("NameShiftCoeff",   new eTB_VarStub <float> (&name_shift_coeff));
+  pCommandProc->AddVariable ("AllowScissor",     new eTB_VarStub <bool>  (&debug.allow_scissor));
+  pCommandProc->AddVariable ("FixMinimap",       new eTB_VarStub <bool>  (&config.render.fix_minimap));
+  pCommandProc->AddVariable ("VertFixMap",       new eTB_VarStub <bool>  (&vert_fix_map));
 
-  command.AddVariable ("TraceFrame",       new eTB_VarStub <bool>  (&tracer.log_frame));
-  command.AddVariable ("FramesToTrace",    new eTB_VarStub <int>   (&tracer.frame_count));
+  pCommandProc->AddVariable ("FixDOF",           new eTB_VarStub <bool>  (&postproc.fix_dof));
+  pCommandProc->AddVariable ("KillDOF",          new eTB_VarStub <bool>  (&postproc.kill_dof));
 
-  command.AddVariable ("Trace.Shaders",    new eTB_VarStub <bool>  (&config.trace.shaders));
-  command.AddVariable ("Trace.UI",         new eTB_VarStub <bool>  (&config.trace.ui));
-  command.AddVariable ("Trace.HUD",        new eTB_VarStub <bool>  (&config.trace.hud));
-  command.AddVariable ("Trace.Menus",      new eTB_VarStub <bool>  (&config.trace.menus));
-  command.AddVariable ("Trace.Minimap",    new eTB_VarStub <bool>  (&config.trace.minimap));
-  command.AddVariable ("Trace.Nametags",   new eTB_VarStub <bool>  (&config.trace.nametags));
+  pCommandProc->AddVariable ("TraceFrame",       new eTB_VarStub <bool>  (&tracer.log_frame));
+  pCommandProc->AddVariable ("FramesToTrace",    new eTB_VarStub <int>   (&tracer.frame_count));
 
-  command.AddVariable ("Render.AllowBG",   new eTB_VarStub <bool>  (&config.render.allow_background));
+  pCommandProc->AddVariable ("Trace.Shaders",    new eTB_VarStub <bool>  (&config.trace.shaders));
+  pCommandProc->AddVariable ("Trace.UI",         new eTB_VarStub <bool>  (&config.trace.ui));
+  pCommandProc->AddVariable ("Trace.HUD",        new eTB_VarStub <bool>  (&config.trace.hud));
+  pCommandProc->AddVariable ("Trace.Menus",      new eTB_VarStub <bool>  (&config.trace.menus));
+  pCommandProc->AddVariable ("Trace.Minimap",    new eTB_VarStub <bool>  (&config.trace.minimap));
+  pCommandProc->AddVariable ("Trace.Nametags",   new eTB_VarStub <bool>  (&config.trace.nametags));
 
-  command.AddVariable ("Render.CullVS",    new eTB_VarStub <int>   (&debug.cull_vs));
-  command.AddVariable ("Render.CullPS",    new eTB_VarStub <int>   (&debug.cull_ps));
+  pCommandProc->AddVariable ("Render.AllowBG",   new eTB_VarStub <bool>  (&config.render.allow_background));
 
-  command.AddVariable ("Render.MapScale",  new eTB_VarStub <float> (&minimap_scale));
+  pCommandProc->AddVariable ("Render.CullVS",    new eTB_VarStub <int>   (&debug.cull_vs));
+  pCommandProc->AddVariable ("Render.CullPS",    new eTB_VarStub <int>   (&debug.cull_ps));
 
-  command.AddVariable ("Mouse.YOff",       new eTB_VarStub <float> (&config.scaling.mouse_y_offset));
-  command.AddVariable ("HUD.XOff",         new eTB_VarStub <float> (&config.scaling.hud_x_offset));
+  pCommandProc->AddVariable ("Render.MapScale",  new eTB_VarStub <float> (&minimap_scale));
+
+  pCommandProc->AddVariable ("Mouse.YOffset",    new eTB_VarStub <float> (&config.scaling.mouse_y_offset));
+  pCommandProc->AddVariable ("HUD.XOffset",      new eTB_VarStub <float> (&config.scaling.hud_x_offset));
+
+  pCommandProc->AddVariable ("Scale.AutoCalc",   new eTB_VarStub <bool> (&config.scaling.auto_calc));
+  pCommandProc->AddVariable ("Scale.Locked",     new eTB_VarStub <bool> (&config.scaling.locked));
 }
 
 bool

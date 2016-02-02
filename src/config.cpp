@@ -25,7 +25,7 @@
 #include "ini.h"
 #include "log.h"
 
-std::wstring AD_VER_STR = L"0.1.1";
+std::wstring AD_VER_STR = L"0.2.0";
 
 static ad::INI::File*  dll_ini = nullptr;
 
@@ -37,7 +37,16 @@ struct {
   ad::ParameterBool*    aspect_correction;
   ad::ParameterBool*    center_ui;
   ad::ParameterBool*    allow_background;
+  ad::ParameterFloat*   foreground_fps;
+  ad::ParameterFloat*   background_fps;
 } render;
+
+struct {
+  ad::ParameterFloat*   mouse_y_offset;
+  ad::ParameterFloat*   hud_x_offset;
+  ad::ParameterBool*    locked;
+  ad::ParameterBool*    auto_calc;
+} scaling;
 
 struct {
   ad::ParameterInt*     always_on_top;
@@ -97,6 +106,67 @@ AD_LoadConfig (std::wstring name) {
     dll_ini,
       L"AgDrag.Render",
         L"AllowBackground" );
+
+  render.foreground_fps =
+    static_cast <ad::ParameterFloat *>
+      (g_ParameterFactory.create_parameter <float> (
+        L"Foreground Framerate Limit")
+      );
+  render.foreground_fps->register_to_ini (
+    dll_ini,
+      L"AgDrag.Render",
+        L"ForegroundFPS" );
+
+  render.background_fps =
+    static_cast <ad::ParameterFloat *>
+      (g_ParameterFactory.create_parameter <float> (
+        L"Background Framerate Limit")
+      );
+  render.background_fps->register_to_ini (
+    dll_ini,
+      L"AgDrag.Render",
+        L"BackgroundFPS" );
+
+
+  scaling.mouse_y_offset = 
+    static_cast <ad::ParameterFloat *>
+      (g_ParameterFactory.create_parameter <float> (
+        L"Mouse Coordinate Y Offset")
+      );
+  scaling.mouse_y_offset->register_to_ini (
+    dll_ini,
+      L"AgDrag.Scaling",
+        L"MouseYOffset" );
+
+  scaling.hud_x_offset = 
+    static_cast <ad::ParameterFloat *>
+      (g_ParameterFactory.create_parameter <float> (
+        L"HUD Coordinate X Offset")
+      );
+  scaling.hud_x_offset->register_to_ini (
+    dll_ini,
+      L"AgDrag.Scaling",
+        L"HUDXOffset" );
+
+  scaling.locked = 
+    static_cast <ad::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Scale Lock")
+      );
+  scaling.locked->register_to_ini (
+    dll_ini,
+      L"AgDrag.Scaling",
+        L"Locked" );
+
+  scaling.auto_calc = 
+    static_cast <ad::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Scale Lock")
+      );
+  scaling.auto_calc->register_to_ini (
+    dll_ini,
+      L"AgDrag.Scaling",
+        L"AutoCalc" );
 
 
   nametags.aspect_correct =
@@ -174,6 +244,25 @@ AD_LoadConfig (std::wstring name) {
   if (render.allow_background->load ())
     config.render.allow_background = render.allow_background->get_value ();
 
+  if (render.foreground_fps->load ())
+    config.render.foreground_fps = render.foreground_fps->get_value ();
+
+  if (render.background_fps->load ())
+    config.render.background_fps = render.background_fps->get_value ();
+
+
+  if (scaling.hud_x_offset->load ())
+    config.scaling.hud_x_offset = scaling.hud_x_offset->get_value ();
+
+  if (scaling.mouse_y_offset->load ())
+    config.scaling.mouse_y_offset = scaling.mouse_y_offset->get_value ();
+
+  if (scaling.locked->load ())
+    config.scaling.locked = scaling.locked->get_value ();
+
+  if (scaling.auto_calc->load ())
+    config.scaling.auto_calc = scaling.auto_calc->get_value ();
+
 
   if (nametags.aspect_correct->load ())
     config.nametags.aspect_correct = nametags.aspect_correct->get_value ();
@@ -211,6 +300,27 @@ AD_SaveConfig (std::wstring name, bool close_config) {
 
   render.allow_background->set_value  (config.render.allow_background);
   render.allow_background->store      ();
+
+  render.foreground_fps->set_value    (config.render.foreground_fps);
+  render.foreground_fps->store        ();
+
+  render.background_fps->set_value    (config.render.background_fps);
+  render.background_fps->store        ();
+
+
+  if (! config.scaling.locked) {
+    scaling.mouse_y_offset->set_value   (config.scaling.mouse_y_offset);
+    scaling.mouse_y_offset->store       ();
+
+    scaling.hud_x_offset->set_value     (config.scaling.hud_x_offset);
+    scaling.hud_x_offset->store         ();
+  }
+
+  scaling.locked->set_value           (config.scaling.locked);
+  scaling.locked->store               ();
+
+  scaling.auto_calc->set_value        (config.scaling.auto_calc);
+  scaling.auto_calc->store            ();
 
 
   nametags.aspect_correct->set_value  (config.nametags.aspect_correct);

@@ -250,7 +250,7 @@ eTB_CommandProcessor::ProcessCommandLine (const char* szCommandLine)
     //free (lowercase_cmd_word);
     free (command_word);
 
-    eTB_Command* cmd = command.FindCommand (cmd_word.c_str ());
+    eTB_Command* cmd = SK_GetCommandProcessor ()->FindCommand (cmd_word.c_str ());
 
     if (cmd != NULL) {
       return cmd->execute (command_args);
@@ -258,7 +258,7 @@ eTB_CommandProcessor::ProcessCommandLine (const char* szCommandLine)
 
     /* No command found, perhaps the word was a variable? */
 
-    const eTB_Variable* var = command.FindVariable (cmd_word.c_str ());
+    const eTB_Variable* var = SK_GetCommandProcessor ()->FindVariable (cmd_word.c_str ());
 
     if (var != NULL) {
       if (var->getType () == eTB_Variable::Boolean)
@@ -356,6 +356,35 @@ eTB_CommandProcessor::ProcessCommandLine (const char* szCommandLine)
   }
 }
 
+#include <cstdarg>
+
+eTB_CommandResult
+eTB_CommandProcessor::ProcessCommandFormatted (const char* szCommandFormat, ...)
+{
+  va_list ap;
+  int     len;
+
+  va_start         (ap, szCommandFormat);
+  len = _vscprintf (szCommandFormat, ap);
+  va_end           (ap);
+
+  char* szFormattedCommandLine =
+    (char *)malloc (sizeof (char) * (len + 1));
+
+  *(szFormattedCommandLine + len) = '\0';
+
+  va_start (ap, szCommandFormat);
+  vsprintf (szFormattedCommandLine, szCommandFormat, ap);
+  va_end   (ap);
+
+  eTB_CommandResult result =
+    ProcessCommandLine (szFormattedCommandLine);
+
+  free (szFormattedCommandLine);
+
+  return result;
+}
+
 /** Variable Type Support **/
 
 
@@ -443,7 +472,42 @@ eTB_VarStub <float>::getValueString (void) const
   char szFloatString [32];
   snprintf (szFloatString, 32, "%f", getValue ());
 
+  // Remove trailing 0's after the .
+  int len = strlen (szFloatString);
+  for (int i = (len - 1); i > 1; i--) {
+    if (szFloatString [i] == '0' && szFloatString [i - 1] != '.')
+      len--;
+    if (szFloatString [i] != '0' && szFloatString [i] != '\0')
+      break;
+  }
+
+  szFloatString [len] = '\0';
+
   return std::string (szFloatString);
 }
 
-eTB_CommandProcessor command;
+
+//
+// In case the injector's command processor is not workable
+// t
+eTB_CommandProcessor*
+__stdcall
+FALLBACK_GetCommandProcessor (void)
+{
+  static eTB_CommandProcessor* command = nullptr;
+
+  if (command == nullptr) {
+    command = new eTB_CommandProcessor ();
+  }
+
+  return command;
+}
+
+// This _should_ be overwritten with Special K's DLL import
+SK_GetCommandProcessor_pfn SK_GetCommandProcessor = &FALLBACK_GetCommandProcessor;
+
+////
+//// TODO: Eliminate the dual-definition of this class, and add SpecialK as a compile-time
+////         dependency. That project will need some additional re-design for this
+////          to happen, but it is an important step for modularity.
+////

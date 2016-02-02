@@ -124,11 +124,13 @@
     <ClInclude Include="hud\minimap.h" />
     <ClInclude Include="hud\nametags.h" />
     <ClInclude Include="ini.h" />
+    <ClInclude Include="input.h" />
     <ClInclude Include="log.h" />
     <ClInclude Include="menu.h" />
     <ClInclude Include="MinHook\include\MinHook.h" />
     <ClInclude Include="parameter.h" />
     <ClInclude Include="render.h" />
+    <ClInclude Include="window.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="command.cpp" />
@@ -146,12 +148,14 @@
     <ClCompile Include="hud\minimap.cpp" />
     <ClCompile Include="hud\nametags.cpp" />
     <ClCompile Include="ini.cpp" />
+    <ClCompile Include="input.cpp" />
     <ClCompile Include="log.cpp" />
     <ClCompile Include="parameter.cpp" />
     <ClCompile Include="render.cpp">
       <MultiProcessorCompilation Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</MultiProcessorCompilation>
       <MultiProcessorCompilation Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</MultiProcessorCompilation>
     </ClCompile>
+    <ClCompile Include="window.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

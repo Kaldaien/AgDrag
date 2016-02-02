@@ -35,11 +35,14 @@ struct ad_config_s
     bool     center_ui         = true;
     bool     fix_minimap       = true;
     bool     allow_background  = true;
+    float    foreground_fps    =  0.0f; // Unlimited
+    float    background_fps    = 15.0f;
   } render;
 
   struct {
     float    mouse_y_offset    = 0.0f;
     float    hud_x_offset      = 0.0f;
+    bool     auto_calc         = true;
     bool     locked            = true;
   } scaling;
 
