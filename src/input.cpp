@@ -18,6 +18,11 @@
  *
  *   If not, see <http://www.gnu.org/licenses/>.
  *
+ *
+ * MODIFIED in 2026 by EveryNightLive (unofficial 32:9 update):
+ *   32:9 support, compatibility with the Dec/2017 DDDA.exe and recent
+ *   Special K versions, full map / menu / HUD fixes, build fixes.
+ *   Changes are marked with "FIX" comments. See README.md.
 **/
 #define _CRT_SECURE_NO_WARNINGS
 
@@ -41,6 +46,13 @@
 
 #include "input.h"
 
+// FIX: extern declarations moved to global scope. Inside functions of the
+//   ad::InputManager namespace they referred to ad::InputManager::*
+//   (standard C++ behavior), which does not exist.
+extern HMODULE hDLLMod;
+extern float   name_shift_coeff;
+extern bool    vert_fix_map;
+
 ClipCursor_pfn ClipCursor_Original = nullptr;
 
 void
@@ -55,7 +67,8 @@ AD_ComputeAspectCoeffsEx (float& x, float& y, float& xoff, float& yoff, bool for
   if (! (config.render.aspect_correction || force))
     return;
 
-  config.render.aspect_ratio = ad::RenderFix::width / ad::RenderFix::height;
+  // FIX (32:9): was an integer division (5120/1440 = 3, 3440/1440 = 2)
+  config.render.aspect_ratio = (float)ad::RenderFix::width / (float)ad::RenderFix::height;
   float rescale = ((16.0f / 9.0f) / config.render.aspect_ratio);
 
   // Wider
@@ -520,7 +533,6 @@ ad::InputManager::Hooker::MessagePump (LPVOID hook_ptr)
 
   text [0] = '>';
 
-  extern    HMODULE hDLLMod;
 
   DWORD dwThreadId;
 
@@ -751,7 +763,10 @@ ad::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
                 GetProcAddress ( hD3D9,
                                     "BMF_SteamAPI_SetOverlayState" );
 
-          BMF_SteamAPI_SetOverlayState (visible);
+          // FIX: current Special K no longer exports this function (it was called
+          //   without checking -> crash when pressing Ctrl+Shift+Tab).
+          if (BMF_SteamAPI_SetOverlayState != nullptr)
+            BMF_SteamAPI_SetOverlayState (visible);
         }
         else if (keys_ [VK_MENU] && vkCode == 'A' && new_press) {
           pCommandProc->ProcessCommandLine ("AspectCorrection toggle");
@@ -777,26 +792,30 @@ ad::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
           if (! config.scaling.locked)
             config.scaling.auto_calc = false;
         } else if (vkCode == VK_OEM_6) {
-          extern float name_shift_coeff;
           name_shift_coeff += 0.001f;
         } else if (vkCode == VK_OEM_4) {
-          extern float name_shift_coeff;
           name_shift_coeff -= 0.001f;
         } else if (keys_ [VK_MENU] && vkCode == 'V' && new_press) {
-          extern bool vert_fix_map;
           vert_fix_map = ! vert_fix_map;
         } else if (keys_ [VK_MENU] && vkCode == 'L' && new_press) {
           pCommandProc->ProcessCommandLine ("FramesToTrace 1");
           pCommandProc->ProcessCommandLine ("TraceFrame true");
         } else if (keys_ [VK_MENU] && vkCode == 'D' && new_press) {
           pCommandProc->ProcessCommandLine ("FixDOF toggle");
-        } else if (keys_ [VK_MENU] && vkCode == VK_BACK && new_press) {
+        }
+        // FIX: Ctrl+Shift+Alt+Backspace hotkey disabled. It wrote to a fixed
+        //   address (0x01618ee8) of the 2016 DDDA.exe, which does not match the
+        //   current executable (same problem as the map hook).
+#if 0
+        else if (keys_ [VK_MENU] && vkCode == VK_BACK && new_press) {
           float* pfUIAspect = (float *)0x01618ee8;
           DWORD dwOld;
           VirtualProtect (pfUIAspect, 4, PAGE_READWRITE, &dwOld);
           *pfUIAspect = -*pfUIAspect;
           VirtualProtect (pfUIAspect, 4, dwOld, &dwOld);
-        } else if (keys_ [VK_MENU] && vkCode == config.nametags.toggle_on_top_key && new_press) {
+        }
+#endif
+        else if (keys_ [VK_MENU] && vkCode == config.nametags.toggle_on_top_key && new_press) {
           if (config.nametags.always_on_top++ > 1)
             config.nametags.always_on_top = 0;
         } else if (keys_ [VK_MENU] && vkCode == 'M' && new_press) {

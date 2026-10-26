@@ -1,3 +1,10 @@
+/*
+ * MODIFIED in 2026 by EveryNightLive (unofficial 32:9 update):
+ *   32:9 support, compatibility with the Dec/2017 DDDA.exe and recent
+ *   Special K versions, full map / menu / HUD fixes, build fixes.
+ *   Changes are marked with "FIX" comments. See README.md.
+ */
+
 #ifndef __EPSILON_TESTBED__COMMAND_H__
 #define __EPSILON_TESTBED__COMMAND_H__
 
@@ -12,6 +19,11 @@
 //#include "../Epsilon/string.h"
 
 #include <locale> // tolower (...)
+#include <string>
+#include <vector>
+#include <cstring>
+#include <cstdint>
+#include <functional>
 
 template <typename T>
 class eTB_VarStub;// : public eTB_Variable
@@ -109,9 +121,8 @@ class eTB_VarStub : public eTB_Variable
 {
 friend class eTB_iVariableListener;
 public:
-  eTB_VarStub (void) : type_     (Unknown),
-                       var_      (NULL),
-                       listener_ (NULL)     { };
+  eTB_VarStub (void) : var_      (NULL),
+                       listener_ (NULL)     { type_ = Unknown; };
 
   eTB_VarStub ( T*                     var,
                 eTB_iVariableListener* pListener = NULL );
@@ -143,7 +154,8 @@ private:
   eTB_iVariableListener*     listener_;
 };
 
-#define eTB_CaseAdjust(ch,lower) ((lower) ? __ascii_tolower ((ch)) : (ch))
+// FIX: __ascii_tolower was an internal of the old MSVC CRT
+#define eTB_CaseAdjust(ch,lower) (((lower) && (ch) >= 'A' && (ch) <= 'Z') ? ((ch) - 'A' + 'a') : (ch))
 
 // Hash function for UTF8 strings
 template < class _Kty, class _Pr = std::less <_Kty> >

@@ -18,6 +18,11 @@
  *
  *   If not, see <http://www.gnu.org/licenses/>.
  *
+ *
+ * MODIFIED in 2026 by EveryNightLive (unofficial 32:9 update):
+ *   32:9 support, compatibility with the Dec/2017 DDDA.exe and recent
+ *   Special K versions, full map / menu / HUD fixes, build fixes.
+ *   Changes are marked with "FIX" comments. See README.md.
 **/
 #ifndef __AD__HUD_MINIMAP_H__
 #define __AD__HUD_MINIMAP_H__
@@ -41,6 +46,13 @@ struct ad_minimap_s : ad_hud_render_task_s {
   float ps43           = 0.0f;
 
   bool  center_prim    = false; // The triangle in the middle
+
+  // GetTickCount () of the last time the map menu ran (see minimap.cpp)
+  unsigned long map_menu_tick = 0;
+
+  // Last UI matrix was identity at the origin (leftover element, see render.cpp)
+  bool  origin_prim    = false;
+  bool isMapMenuActive (void);
 
   void init  (void);
   void reset (void);

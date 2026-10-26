@@ -1,3 +1,10 @@
+/*
+ * MODIFIED in 2026 by EveryNightLive (unofficial 32:9 update):
+ *   32:9 support, compatibility with the Dec/2017 DDDA.exe and recent
+ *   Special K versions, full map / menu / HUD fixes, build fixes.
+ *   Changes are marked with "FIX" comments. See README.md.
+ */
+
 #include "../config.h"
 
 #include <d3d9.h>
@@ -68,11 +75,11 @@ DWORD dwLastBlend    = 0;
 #include "../hook.h"
 
 typedef void (__stdcall *uGUIMap_draw_pfn)(void);
-uGUIMap_draw_pfn uGUIMap_draw_Original = nullptr;
+static uGUIMap_draw_pfn uGUIMap_draw_Original = nullptr; // FIX: static (name duplicated in minimap.cpp)
 
 void
 __stdcall
-uGUIMap_draw_Detour (void)
+uGUIMap_draw_Detour_Nametags (void)
 {
   //dll_log.Log (L"uGUIMap::draw (...)");
 

@@ -18,12 +18,18 @@
  *
  *   If not, see <http://www.gnu.org/licenses/>.
  *
+ *
+ * MODIFIED in 2026 by EveryNightLive (unofficial 32:9 update):
+ *   32:9 support, compatibility with the Dec/2017 DDDA.exe and recent
+ *   Special K versions, full map / menu / HUD fixes, build fixes.
+ *   Changes are marked with "FIX" comments. See README.md.
 **/
 #ifndef __AD__CONFIG_H__
 #define __AD__CONFIG_H__
 
 #include <Windows.h>
 #include <string>
+#include <cstdint>
 
 extern std::wstring AD_VER_STR;
 
@@ -34,6 +40,9 @@ struct ad_config_s
     float    aspect_ratio      = (16.0f / 9.0f);
     bool     center_ui         = true;
     bool     fix_minimap       = true;
+    bool     hook_map          = true;  // full map detection (located at runtime)
+    bool     map_height_patch  = true;  // full map sees a 16:9 screen (MapMode=1)
+    int      map_mode          = 1;     // 0 = native 32:9 map (mouse misaligned), 1 = map in the 16:9 area (consistent)
     bool     allow_background  = true;
     float    foreground_fps    =  0.0f; // Unlimited
     float    background_fps    = 15.0f;
@@ -47,7 +56,8 @@ struct ad_config_s
   } scaling;
 
   struct {
-    bool     aspect_correct    = false;
+    bool     aspect_correct    = true;  // FIX (32:9): was false (stretched nametags)
+    float    shift_coeff       = 0.0f;  // 0 = automatic
     int      always_on_top     = 2;
     bool     temp_on_top       = false; // When the key combo is held
     uint16_t

@@ -18,12 +18,18 @@
  *
  *   If not, see <http://www.gnu.org/licenses/>.
  *
+ *
+ * MODIFIED in 2026 by EveryNightLive (unofficial 32:9 update):
+ *   32:9 support, compatibility with the Dec/2017 DDDA.exe and recent
+ *   Special K versions, full map / menu / HUD fixes, build fixes.
+ *   Changes are marked with "FIX" comments. See README.md.
 **/
 
 #ifndef __AD__RENDER_H__
 #define __AD__RENDER_H__
 
 #include "command.h"
+#include <cstdint>
 
 struct IDirect3DDevice9;
 struct IDirect3DSurface9;

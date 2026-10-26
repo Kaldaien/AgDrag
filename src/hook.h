@@ -18,11 +18,17 @@
  *
  *   If not, see <http://www.gnu.org/licenses/>.
  *
+ *
+ * MODIFIED in 2026 by EveryNightLive (unofficial 32:9 update):
+ *   32:9 support, compatibility with the Dec/2017 DDDA.exe and recent
+ *   Special K versions, full map / menu / HUD fixes, build fixes.
+ *   Changes are marked with "FIX" comments. See README.md.
 **/
 #ifndef __AD__HOOK_H__
 #define __AD__HOOK_H__
 
-#pragma comment (lib, "MinHook/lib/libMinHook.x86.lib")
+// FIX: lib removed - built with /GL in VS2015, does not link with current VS.
+//   No MH_* function is called (hooks come from the d3d9.dll injector).
 #include "MinHook/include/MinHook.h"
 
 void

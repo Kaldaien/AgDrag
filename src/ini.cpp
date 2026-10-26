@@ -18,6 +18,11 @@
  *
  *   If not, see <http://www.gnu.org/licenses/>.
  *
+ *
+ * MODIFIED in 2026 by EveryNightLive (unofficial 32:9 update):
+ *   32:9 support, compatibility with the Dec/2017 DDDA.exe and recent
+ *   Special K versions, full map / menu / HUD fixes, build fixes.
+ *   Changes are marked with "FIX" comments. See README.md.
 **/
 
 #define _CRT_SECURE_NO_WARNINGS
@@ -57,7 +62,7 @@ ErrorMessage (errno_t        err,
   return wszFormattedError;
 }
 
-#define TRY_FILE_IO(x,y,z) { (z) = ##x; if ((z) != 0) \
+#define TRY_FILE_IO(x,y,z) { (z) = x; if ((z) != 0) \
 dll_log.Log (L"%ws", ErrorMessage ((z), #x, (y), __LINE__, __FUNCTION__, __FILE__)); }
 
 ad::INI::File::File (wchar_t* filename)

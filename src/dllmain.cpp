@@ -18,6 +18,11 @@
  *
  *   If not, see <http://www.gnu.org/licenses/>.
  *
+ *
+ * MODIFIED in 2026 by EveryNightLive (unofficial 32:9 update):
+ *   32:9 support, compatibility with the Dec/2017 DDDA.exe and recent
+ *   Special K versions, full map / menu / HUD fixes, build fixes.
+ *   Changes are marked with "FIX" comments. See README.md.
 **/
 
 #include <Windows.h>
@@ -51,8 +56,20 @@ DllThread (LPVOID user)
 
   SK_SetPluginName = 
     (SK_SetPluginName_pfn)GetProcAddress (hInjectorDLL, "SK_SetPluginName");
+  // FIX: do NOT use Special K's command processor.
+  //
+  //   AgDrag manipulates SK's processor with its own (non-virtual) code,
+  //   assuming the layout of SK's 2016 classes. Current Special K versions
+  //   changed those classes (e.g. getValueString has a different signature),
+  //   and the game crashed in SK_IVarStub<float>::getValueString when running
+  //   "TargetFPS". AgDrag now always uses its own command processor
+  //   (FALLBACK_GetCommandProcessor). Side effect: AgDrag's FPS limiter
+  //   (ForegroundFPS/BackgroundFPS) no longer forwards anything to SK;
+  //   use Special K's own limiter (d3d9.ini).
+#if 0
   SK_GetCommandProcessor =
     (SK_GetCommandProcessor_pfn)GetProcAddress (hInjectorDLL, "SK_GetCommandProcessor");
+#endif
 
   //
   // If this is NULL, the injector system isn't working right!!!
@@ -95,7 +112,7 @@ DllMain (HMODULE hModule,
       config.render.fix_minimap       = true;
 
       config.nametags.always_on_top   = true;
-      config.nametags.aspect_correct  = false;
+      config.nametags.aspect_correct  = true;
 
       // Save a new config if none exists
       AD_SaveConfig ();
